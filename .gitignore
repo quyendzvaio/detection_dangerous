@@ -1,0 +1,23 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Database files
+database/factory.db
+
+# Large Model Weights (recommended to download separately)
+weights/yolov8n-pose.pt
+weights/PPE_weights/*.pt
+weights/re_id_weights/*.pth
+weights/re_id_weights/*.pt
+
+# User test media
+test_media/
