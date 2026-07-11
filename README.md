@@ -150,5 +150,21 @@ Dự án sử dụng cơ sở dữ liệu **SQLite** tự động khởi tạo k
 | `no_glasses` | `INTEGER` | 1 nếu không đeo kính, ngược lại là 0 |
 | `no_gloves` | `INTEGER` | 1 nếu không đeo găng tay, ngược lại là 0 |
 | `no_vest` | `INTEGER` | 1 nếu không mặc áo bảo hộ, ngược lại là 0 |
-| `violation_time` | `TIMESTAMP` | Thời gian xảy ra vi phạm |
 | `image_path` | `TEXT` | Đường dẫn lưu ảnh bằng chứng lỗi |
+
+---
+
+## 📊 Benchmark Hệ Thống Cục Bộ (Local Baseline)
+
+Trước khi chuyển đổi sang kiến trúc Microservices / Triton Inference Server, dưới đây là các thông số hiệu năng gốc (baseline) được đo lường trực tiếp trên máy cục bộ bằng source code gốc:
+
+| Thành phần đo lường | Thời gian trung bình | Ghi chú |
+| :--- | :--- | :--- |
+| **Tốc độ luồng chính (Tracker FPS)** | **~5-6 FPS** | Tốc độ xử lý toàn chuỗi (End-to-End) bị nghẽn do chạy chung tiến trình Python. |
+| **Độ trễ YOLO Pose** | **~70 - 130 ms** | Thời gian chạy model phát hiện và vẽ xương (chưa tối ưu TensorRT). |
+| **Độ trễ OSNet Re-ID** | **~200 - 250 ms** | Lần tải đầu tiên (Warmup) tốn ~490ms, sau đó ổn định ở mức ~200ms. |
+| **Độ trễ PPE Classifiers (4 mô hình)** | **~20 - 50 ms / mô hình** | Rất nhanh sau khi warmup, nhưng nếu có nhiều người sẽ bị cộng dồn. |
+
+> 💡 **Nhận xét chuyên môn:**
+> Do đặc thù **GIL (Global Interpreter Lock)** của Python, việc tải 6 mô hình Deep Learning trên 3 luồng (Threads) trong cùng 1 tiến trình đang khiến hệ thống bị **nghẽn nút thắt cổ chai (bottleneck) tại CPU**. Khi chúng ta di dời sang **Triton Inference Server**, các model sẽ được đẩy xuống tầng C++ với cơ chế **Dynamic Batching** và **chạy song song thực sự (True Concurrency)**, hứa hẹn sẽ tăng FPS lên rất nhiều lần.
+
