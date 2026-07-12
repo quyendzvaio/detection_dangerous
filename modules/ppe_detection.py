@@ -1,39 +1,54 @@
 import os
 import cv2
 import numpy as np
-from ultralytics import YOLO
+import tritonclient.grpc as grpcclient
 
 import sys
 # Add parent directory to sys.path to allow config import when running directly
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import config
+from config import USE_GPU
 
 class PPEDetector:
-    def __init__(self, weights_dir=config.PPE_WEIGHTS_DIR, use_gpu=config.USE_GPU):
+    def __init__(self, use_gpu=USE_GPU):
         """
-        Initialize the 4 YOLO classification models for PPE detection.
+        Initialize the gRPC client for PPE detection.
         """
-        device = "cuda" if use_gpu else "cpu"
-        self.device = device
+        print("Đang kết nối tới Triton PPE Models...")
+        self.client = grpcclient.InferenceServerClient(url="localhost:8001")
         
-        self.head_model = YOLO(os.path.join(weights_dir, "head_best.pt"))
-        self.face_model = YOLO(os.path.join(weights_dir, "face_best.pt"))
-        self.hand_model = YOLO(os.path.join(weights_dir, "hand_best.pt"))
-        self.torso_model = YOLO(os.path.join(weights_dir, "torso_best.pt"))
+        # Save model names for Triton
+        self.head_model = "ppe_head"
+        self.face_model = "ppe_face"
+        self.hand_model = "ppe_hand"
+        self.torso_model = "ppe_torso"
 
-    def predict_crop(self, model, crop):
+    def predict_crop(self, model_name, crop):
         """
-        Helper function to run classification on a single crop image.
+        Helper function to run classification on a single crop image using Triton gRPC.
         Returns the top 1 class ID or None if crop is invalid.
         """
         if crop is None or crop.size == 0:
             return None
         
-        # YOLO classification expects an image
-        results = model.predict(crop, verbose=False, device=self.device)
-        if len(results) > 0 and results[0].probs is not None:
-            return int(results[0].probs.top1)
-        return None
+        try:
+            # Resize to 128x128 as expected by the exported model
+            img = cv2.resize(crop, (128, 128))
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = img.astype(np.float32) / 255.0
+            img = img.transpose(2, 0, 1)
+            img = np.expand_dims(img, axis=0)
+
+            inputs = [grpcclient.InferInput("images", img.shape, "FP32")]
+            inputs[0].set_data_from_numpy(img)
+            outputs = [grpcclient.InferRequestedOutput("output0")]
+
+            response = self.client.infer(model_name=model_name, inputs=inputs, outputs=outputs)
+            probs = response.as_numpy("output0")[0]
+            
+            return int(np.argmax(probs))
+        except Exception as e:
+            print(f"Lỗi Triton PPE {model_name}: {e}")
+            return None
 
     def detect_violations(self, crops):
         """

@@ -13,7 +13,7 @@ def run_tracker(camera_source, reid_queue, ppe_queue, shared_results, track_to_p
     Producer thread: reads camera, runs YOLOv8-pose + Bot-SORT tracking, 
     crops persons, and pushes data to separate Re-ID and PPE queues.
     """
-    model = YOLO(config.POSE_WEIGHTS_PATH)
+    model = YOLO(config.POSE_WEIGHTS_PATH, task='pose')
     cap = cv2.VideoCapture(camera_source)
     if not cap.isOpened():
         print(f"Error: Could not open video source {camera_source}")

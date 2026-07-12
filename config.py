@@ -23,6 +23,10 @@ POSE_WEIGHTS_PATH = "weights/yolov8n-pose.pt"
 
 # Directory containing 4 classification weights for PPE (head, face, hand, torso)
 PPE_WEIGHTS_DIR = "weights/PPE_weights"
+HEAD_WEIGHTS_PATH = "http://localhost:8000/ppe_head"
+FACE_WEIGHTS_PATH = "http://localhost:8000/ppe_face"
+HAND_WEIGHTS_PATH = "http://localhost:8000/ppe_hand"
+TORSO_WEIGHTS_PATH = "http://localhost:8000/ppe_torso"
 
 # ==============================================================================
 # DATABASE SETTINGS

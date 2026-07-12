@@ -21,7 +21,7 @@ def run_reid(reid_queue, shared_results, track_to_person, weight_path, stop_even
     if weight_path is None:
         weight_path = config.REID_WEIGHTS_PATH
 
-    reid_brain = ReIDInference(weight_path=weight_path)
+    reid_brain = ReIDInference()
     local_gallery = load_gallery_features()
 
     while not stop_event.is_set():
