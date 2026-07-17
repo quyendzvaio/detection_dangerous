@@ -2,11 +2,11 @@ import queue
 import numpy as np
 import sys
 import os
-from modules.reid_inference import ReIDInference
+from ai_engine.inference.reid_client import ReIDInference
 from database.queries import load_gallery_features, insert_person
 
 # Add parent directory to sys.path to allow config import when running directly
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import config
 
 def run_reid(reid_queue, shared_results, track_to_person, weight_path, stop_event, threshold=None):

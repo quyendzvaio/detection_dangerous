@@ -2,12 +2,12 @@ import queue
 import time
 import sys
 import os
-from modules.ppe_detection import PPEDetector
-from modules.crop_body import get_crop
+from ai_engine.analytics.ppe_detection import PPEDetector
+from ai_engine.analytics.crop_body import get_crop
 from database.queries import insert_violation
 
 # Add parent directory to sys.path to allow config import when running directly
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import config
 
 def run_ppe(ppe_queue, shared_results, track_to_person, stop_event):

@@ -4,9 +4,9 @@ import os
 
 import config
 from database.connection import initialize_database
-from modules.pipeline_reid import run_reid
-from modules.pipeline_ppe import run_ppe
-from modules.tracker import run_tracker
+from ai_engine.analytics.reid_pipeline import run_reid
+from ai_engine.analytics.ppe_pipeline import run_ppe
+from ai_engine.workers.tracker import run_tracker
 
 def main():
     weights_path = config.REID_WEIGHTS_PATH

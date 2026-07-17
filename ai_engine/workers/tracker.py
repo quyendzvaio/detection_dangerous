@@ -5,7 +5,7 @@ import os
 from ultralytics import YOLO
 
 # Add parent directory to sys.path to allow config import when running directly
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import config
 
 def run_tracker(camera_source, reid_queue, ppe_queue, shared_results, track_to_person, stop_event):

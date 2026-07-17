@@ -5,7 +5,7 @@ import tritonclient.grpc as grpcclient
 
 import sys
 # Add parent directory to sys.path to allow config import when running directly
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from config import USE_GPU
 
 class PPEDetector:

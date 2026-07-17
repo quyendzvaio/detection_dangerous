@@ -16,3 +16,14 @@ database/factory.db
 
 # User test media
 test_media/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# Standalone HTML doc (3.5MB — mermaid inlined, sinh lại được; PDF đã đủ để share)
+docs/pipeline-architecture.html
+
+# Secrets & evidence spool
+.env
+evidence_spool/
