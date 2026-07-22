@@ -11,18 +11,21 @@ Required environment variables (put them in .env, never commit):
 """
 import os
 
-import boto3
-
 
 class R2Storage:
     def __init__(self):
-        account_id = os.environ["R2_ACCOUNT_ID"]
-        self.bucket = os.environ["R2_BUCKET"]
+        try:
+            import boto3
+        except ImportError:
+            raise RuntimeError("boto3 is not installed. Please run 'pip install boto3' to use Cloudflare R2 storage.")
+            
+        account_id = os.environ.get("R2_ACCOUNT_ID", "")
+        self.bucket = os.environ.get("R2_BUCKET", "industrial-safety-evidence")
         self.client = boto3.client(
             "s3",
             endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
-            aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-            aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+            aws_access_key_id=os.environ.get("R2_ACCESS_KEY_ID", ""),
+            aws_secret_access_key=os.environ.get("R2_SECRET_ACCESS_KEY", ""),
             region_name="auto",
         )
 

@@ -5,6 +5,8 @@ ultralytics>=8.2.0          # YOLOv8-pose + BoT-SORT tracking (chạy nội bộ
 opencv-python>=4.9.0.80     # Đọc camera/video, cắt ảnh, hiển thị UI
 numpy>=1.24.0               # Xử lý ma trận ảnh & vector đặc trưng
 tritonclient[grpc]>=2.40.0  # Client gRPC gọi Triton (OSNet Re-ID + 4 model PPE)
+psycopg2-binary>=2.9.9      # PostgreSQL driver cho SQLAlchemy
+sqlalchemy>=2.0.0           # ORM Database Toolkit
 
 # ==============================================================================
 # EXPORT-ONLY DEPENDENCIES (export_scripts/ - dùng khi export .pt -> .onnx)
