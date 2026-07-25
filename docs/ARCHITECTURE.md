@@ -1,17 +1,18 @@
 # Kiến Trúc Hệ Thống — Industrial Safety AI Analytics
 
-> **v1.3 — đã chốt kiến trúc + serving (17/07/2026).** Bản đầy đủ có giải thích chi tiết: [artifact review](https://claude.ai/code/artifact/94ff4b14-4ef9-4a90-93a5-66fc753eed60)
+> **v1.4 — tích hợp model fall thật (18/07/2026).** Bản đầy đủ có giải thích chi tiết: [artifact review](https://claude.ai/code/artifact/94ff4b14-4ef9-4a90-93a5-66fc753eed60)
 
 Hệ thống giám sát an toàn nhà máy **2 camera USB** với 4 tính năng: **Re-ID · PPE · Restricted Zone · Fall Detection**, chạy trên laptop GPU **4GB VRAM**.
 
-## 4 Quyết Định Kiến Trúc Đã Chốt
+## 5 Quyết Định Kiến Trúc Đã Chốt
 
 | # | Quyết định | Chi tiết |
 |---|---|---|
 | 1 | **Camera: USB** | V4L2, ép FOURCC `MJPG` 1280×720@25 — 2 luồng YUYV thô sẽ vượt băng thông USB |
-| 2 | **YOLOv8-Pose chạy trên Triton** | Worker Python không giữ model nào; tracking dùng BoT-SORT của thư viện **BoxMOT** trên detections |
-| 3 | **Fall model nhận chuỗi keypoints** | Buffer trượt theo **timestamp**/track, resample về FPS model được train; interface `FallDetector.predict(keypoints_window)` |
+| 2 | **Pose chạy trên Triton — YOLO11n-pose (v1.4)** | Đổi từ YOLOv8n để khớp phân bố keypoints mà model fall được train; `imgsz 640 · conf 0.25` khóa cứng; tracking dùng BoT-SORT (**BoxMOT**) trên detections |
+| 3 | **Fall model nhận chuỗi keypoints** | Buffer trượt theo **timestamp**/track, resample 60 bước; cửa sổ ~1s, cần ≥8 điểm thật |
 | 4 | **Lưu trữ tách đôi** | Ảnh/video bằng chứng → **Cloudflare R2** (S3 API); dữ liệu có cấu trúc → **PostgreSQL**; DB chỉ lưu `evidence_key` |
+| 5 | **Tích hợp model fall thật (v1.4)** | Temporal Transformer (Keras → ONNX) input (60, 85); threshold retune **F2** + debounce M/N; heuristic làm lưới an toàn WARNING; **beta** tới khi qua field-test |
 
 ## Sơ Đồ Pipeline End-to-End
 
@@ -75,7 +76,8 @@ flowchart TB
 
 ### Tầng 1 — Camera Worker (1 process/camera)
 - `multiprocessing` — thoát GIL hoàn toàn; worker **không giữ model nào**
-- Chuỗi xử lý: preprocess (letterbox 640) → gRPC `yolo_pose` → decode + NMS → **BoT-SORT (BoxMOT)** gán track_id
+- Pose model: **YOLO11n-pose** (v1.4 — model fall được train trên keypoints của YOLO11n; dùng detector khác là lệch phân bố đầu vào). `imgsz 640 · conf 0.25` khóa theo cấu hình train
+- Chuỗi xử lý: preprocess (letterbox 640) → gRPC `yolo_pose` → decode + NMS → **BoT-SORT (BoxMOT)** gán track_id; mỗi kết quả kèm **timestamp**
 - BoxMOT chạy trên detections thuần, tắt Re-ID nội bộ của tracker (đã có nhánh Re-ID riêng)
 - Track ID tiền tố theo camera (`cam1-17`); danh tính toàn cục do Re-ID quyết định
 - **Không I/O mạng chặn trong vòng lặp frame** (DB, R2, email đều đi qua Event Bus)
@@ -86,7 +88,7 @@ flowchart TB
 | **Re-ID** | 1 lần/track mới | Crop 128×256 → `osnet_reid` → vector 512-D → so cosine (threshold 0.3) với **gallery toàn cục cross-camera** |
 | **PPE** | mỗi 2s/người | Crop đầu/mặt/thân/tay từ keypoints → 4 classifier 128×128 → cooldown 30s chống ghi trùng |
 | **Zone** | mỗi frame (CPU) | Điểm chân (đáy bbox) → `cv2.pointPolygonTest` với polygon từ DB → debounce 5 frame ([zone.py](../ai_engine/analytics/zone.py)) |
-| **Fall** | cửa sổ trượt | Buffer keypoints **theo timestamp**, resample về FPS model được train → `FallDetector.predict()` ([fall.py](../ai_engine/analytics/fall.py)); heuristic dự phòng; CRITICAL bỏ qua cooldown |
+| **Fall** | cửa sổ ~1s, stride ~0.3s | Pipeline 4 khối ([fall.py](../ai_engine/analytics/fall.py)): TrackKeypointBuffer (timestamp, ≥8 điểm) → FallPreprocessor (normalize + nội suy + resample 60 + velocity ⇒ 60×85) → fall_model Triton → FallDecision (F2 threshold + debounce M/N) ⇒ CRITICAL; heuristic W/H + góc thân là lưới an toàn WARNING |
 
 ### Tầng 3 — Triton Inference Server & Ngân Sách VRAM
 
@@ -98,8 +100,8 @@ Triton 24.01 (Docker), ONNX Runtime backend, gRPC :8001, dynamic batching gộp 
 | yolo_pose (1 instance chung 2 cam) | FP16 | ~400–600 MB | Dynamic batch |
 | osnet_reid | FP16 | ~250 MB | max_batch 16 |
 | ppe ×4 (head/face/hand/torso) | FP16 | ~400 MB | Classifier nhỏ |
-| fall_model (chuỗi keypoints) | FP16 | ~100–200 MB | Model chuỗi nhẹ |
-| **Tổng** | | **~1.7–2.0 GB / 4 GB** | Headroom ~2 GB |
+| fall_model (Temporal Transformer) | FP32 | ~50–100 MB | Weights chỉ 2.8MB — chủ yếu là runtime |
+| **Tổng** | | **~1.6–1.9 GB / 4 GB** | Headroom ~2 GB |
 
 Quy tắc: mọi model `instance_count: 1`, xuất ONNX FP16. Lưu ý VRAM thực tế < 4GB nếu GPU rời kiêm xuất màn hình — kiểm tra `nvidia-smi`.
 
@@ -118,6 +120,21 @@ Quy tắc: mọi model `instance_count: 1`, xuất ONNX FP16. Lưu ý VRAM thự
 React 19 + Vite 8 + Router 7, theme sáng/tối. Đã có: Dashboard (metrics + live + recent violations), Cameras (grid, add/delete/power, AI overlay toggle, modal telemetry + model checkbox), Violations (bảng + lọc + snapshot), Reports (KPI + biểu đồ + xuất CSV/PDF), Settings (email digest, SMS, auto-record, retention), Emergency Alert, Login/Register.
 
 **Còn thiếu:** zone editor vẽ polygon, loại vi phạm Fall, trang quản lý nhân viên (gallery Re-ID), route `/models` chưa đăng ký, biểu đồ Reports chưa render cột (bug CSS).
+
+## Nhánh Fall — Model Thật (v1.4)
+
+Model bàn giao: **Compact Temporal Transformer** (Conv1D + 2 encoder, d_model 96, weights 2.8MB), train trên Multiple Cameras Fall Dataset, nguồn keypoints **YOLO11n-pose**. Nguồn: `notebookb0cb845271.ipynb`.
+
+**Metrics test:** ROC-AUC 0.84 · PR-AUC 0.85 · precision 0.93 · **recall 0.45 @0.525 (⚠ bỏ sót 55% cú ngã — phải retune F2)**.
+
+| Thành phần | Vai trò |
+|---|---|
+| `TrackKeypointBuffer` | Ring buffer theo timestamp/track (~1.2s); chỉ predict khi ≥8 điểm thật trong cửa sổ 1s |
+| `FallPreprocessor` | Tái hiện đúng notebook: normalize tâm hông/scale thân → NaN + nội suy thời gian → resample 60 bước → + velocity ⇒ `(60, 85)`. Load `weights/fall_model/inference_config.json` — không hardcode |
+| `fall_model` trên Triton | Keras → ONNX (tf2onnx), verify diff < 1e-4 trên 50 mẫu so với Keras trước khi deploy |
+| `FallDecision` | Threshold F2 (runtime-tunable) + debounce M/N + cooldown/track ⇒ `fall_detected` CRITICAL |
+
+**Cổng kiểm định hiện trường:** quay 10–20 cú ngã giả lập đúng góc camera/ánh sáng thật; recall sau F2 + debounce ≥ 0.8 mới gỡ nhãn beta. Ràng buộc hệ quả: pose inference giữ ≥ ~15 FPS để cửa sổ đủ dày.
 
 ## Serving & Bottleneck — Đã Chốt (17/07/2026)
 
@@ -236,7 +253,7 @@ sequenceDiagram
 │   │   ├── ppe_detection.py    # 4 classifier client (Triton gRPC)
 │   │   ├── crop_body.py        # Cắt bộ phận từ keypoints
 │   │   ├── zone.py             # Vùng cấm: point-in-polygon + debounce
-│   │   └── fall.py             # FallDetector interface + heuristic
+│   │   └── fall.py             # Pipeline 4 khối: buffer → preprocess → Triton → decision
 │   └── inference/reid_client.py # OSNet Triton gRPC client
 ├── backend/                    # FastAPI (skeleton)
 │   ├── main.py                 # App + /health
@@ -259,11 +276,11 @@ sequenceDiagram
 
 1. ✅ Re-ID + PPE lên Triton (nhánh `feature/triton-inference-server`)
 2. ✅ Chốt kiến trúc + serving + tái cấu trúc thư mục (nhánh `feature/system-redesign`)
-3. ⬜ Export uint8-in-graph + pose lên Triton + BoxMOT, chuyển 3-thread → per-camera worker
+3. ⬜ Export **YOLO11n-pose** uint8-in-graph lên Triton + BoxMOT, chuyển 3-thread → per-camera worker
 4. ⬜ Zone intrusion end-to-end (DB zones → checker → event)
 5. ⬜ PostgreSQL + R2 + Event Bus
 6. ⬜ Backend API (REST + WS + MJPEG) → nối frontend
-7. ⬜ Fall model (khi có weights) + chạy thật 2 camera USB + benchmark sustained
+7. 🔄 Fall model: ✅ có weights + fall.py 4 khối → ⬜ convert ONNX → ⬜ retune F2 (Kaggle) → ⬜ field-test gate → chạy thật 2 camera USB + benchmark sustained
 
 ## Repo & Tài Liệu Tham Khảo
 

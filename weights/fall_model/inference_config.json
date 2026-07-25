@@ -1,0 +1,21 @@
+{
+  "max_frames": 60,
+  "num_features": 85,
+  "keypoint_order": [
+    "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+    "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+    "left_wrist", "right_wrist", "left_hip", "right_hip",
+    "left_knee", "right_knee", "left_ankle", "right_ankle"
+  ],
+  "min_keypoint_confidence": 0.2,
+  "threshold": 0.05,
+  "frame_index_base": 1,
+  "_notes": {
+    "source": "Tái tạo từ notebookb0cb845271.ipynb (cell 21) — file gốc chưa được tải về cùng model",
+    "threshold_policy": "0.05 chọn theo F2 (ưu tiên recall) trên validation 18/07/2026. Trên test: fall recall 0.70 (từ 0.45 ở threshold 0.525 cũ), precision 0.83. Threshold rất thấp -> phải dựa vào debounce M/N để kìm báo giả, và precision thực tế khi triển khai sẽ THẤP HƠN test do falls là sự kiện hiếm (base-rate). Chưa đạt cổng field-test recall>=0.8.",
+    "threshold_prev_f1macro": 0.525,
+    "pose_source": "YOLO11n-pose, imgsz=640, conf=0.25 — bắt buộc khớp khi inference",
+    "window_seconds_realtime": 1.0,
+    "min_real_points_per_window": 8
+  }
+}
