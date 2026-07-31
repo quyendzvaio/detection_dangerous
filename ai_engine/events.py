@@ -1,20 +1,26 @@
-"""Non-blocking transport for typed domain events."""
+"""Non-blocking, bounded delivery of typed AI domain events."""
 from __future__ import annotations
 
 import logging
 import queue
+import random
 import threading
 import time
 from abc import ABC, abstractmethod
 from typing import Callable
 
-from ai_engine.contracts.event_schema import DomainEvent, SafetyEvent, Severity
+from ai_engine.contracts.event_schema import (
+    CameraStatusEvent,
+    DomainEvent,
+    SafetyEvent,
+    Severity,
+)
 
 log = logging.getLogger(__name__)
 
 
 class DeliveryError(RuntimeError):
-    pass
+    """An event could not be delivered to its destination."""
 
 
 class EventTransport(ABC):
@@ -26,16 +32,27 @@ class EventTransport(ABC):
 
 
 class HttpEventTransport(EventTransport):
+    """HTTP transport with service auth and retry for transient failures only."""
+
+    RETRYABLE_STATUS_CODES = {408, 425, 429}
+
     def __init__(
         self,
-        url: str = "http://localhost:8080/api/v1/internal/events",
+        event_url: str = "http://localhost:8080/api/v1/internal/events",
+        camera_status_url: str | None = None,
+        service_token: str | None = None,
         timeout: float = 3.0,
         retries: int = 2,
+        backoff_seconds: float = 0.5,
+        session=None,
     ) -> None:
-        self.url = url
+        self.event_url = event_url
+        self.camera_status_url = camera_status_url or event_url.rsplit("/", 1)[0] + "/camera-status"
+        self.service_token = service_token
         self.timeout = timeout
         self.retries = retries
-        self._session = None
+        self.backoff_seconds = backoff_seconds
+        self._session = session
 
     def _get_session(self):
         if self._session is None:
@@ -44,25 +61,57 @@ class HttpEventTransport(EventTransport):
             self._session = requests.Session()
         return self._session
 
+    def _url_for(self, event: DomainEvent) -> str:
+        if isinstance(event, CameraStatusEvent):
+            return self.camera_status_url
+        return self.event_url
+
     def send(self, event: DomainEvent) -> None:
         session = self._get_session()
-        body = event.to_backend_payload()
+        headers = (
+            {"Authorization": f"Bearer {self.service_token}"}
+            if self.service_token
+            else {}
+        )
+        url = self._url_for(event)
         last_error: Exception | None = None
         for attempt in range(self.retries + 1):
             try:
-                response = session.post(self.url, json=body, timeout=self.timeout)
-                response.raise_for_status()
-                return
+                response = session.post(
+                    url,
+                    json=event.to_backend_payload(),
+                    headers=headers,
+                    timeout=self.timeout,
+                )
+                if 200 <= response.status_code < 300:
+                    return
+                body = getattr(response, "text", "")[:500]
+                error = DeliveryError(
+                    f"backend returned HTTP {response.status_code} for event "
+                    f"{event.event_id}: {body}"
+                )
+                if not (
+                    response.status_code in self.RETRYABLE_STATUS_CODES
+                    or response.status_code >= 500
+                ):
+                    raise error
+                last_error = error
+            except DeliveryError:
+                raise
             except Exception as exc:
                 last_error = exc
-                log.warning(
-                    "Event %s delivery failed on attempt %d: %s",
-                    event.event_id,
-                    attempt + 1,
-                    exc,
-                )
-                if attempt < self.retries:
-                    time.sleep(0.5 * (attempt + 1))
+
+            log.warning(
+                "Event %s delivery failed on attempt %d/%d: %s",
+                event.event_id,
+                attempt + 1,
+                self.retries + 1,
+                last_error,
+            )
+            if attempt < self.retries:
+                delay = self.backoff_seconds * (2**attempt)
+                time.sleep(delay + random.uniform(0.0, delay * 0.2))
+
         raise DeliveryError(
             f"event {event.event_id} failed after {self.retries + 1} attempts"
         ) from last_error
@@ -83,6 +132,8 @@ class EventBus:
     """Bounded producer/consumer bridge that never blocks a camera frame loop."""
 
     def __init__(self, transport: EventTransport, max_buffer: int = 200) -> None:
+        if max_buffer <= 0:
+            raise ValueError("max_buffer must be positive")
         self.transport = transport
         self._buffer: queue.Queue[DomainEvent] = queue.Queue(maxsize=max_buffer)
         self._stop = threading.Event()
@@ -94,10 +145,10 @@ class EventBus:
         )
         self._thread.start()
 
-    def publish(self, event: DomainEvent) -> None:
+    def publish(self, event: DomainEvent) -> bool:
         try:
             self._buffer.put_nowait(event)
-            return
+            return True
         except queue.Full:
             pass
 
@@ -109,11 +160,12 @@ class EventBus:
                 self.dropped_count += 1
                 log.warning("Dropped older event %s for CRITICAL event", dropped.event_id)
                 self._buffer.put_nowait(event)
-                return
+                return True
             except (queue.Empty, queue.Full):
                 pass
         self.dropped_count += 1
         log.warning("Event buffer full; dropped event %s", event.event_id)
+        return False
 
     def _drain_loop(self) -> None:
         while not self._stop.is_set() or not self._buffer.empty():

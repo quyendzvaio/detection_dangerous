@@ -1,41 +1,39 @@
-from typing import Optional, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel
+from typing import Literal
+from uuid import UUID
 
-
-class ViolationCreate(BaseModel):
-    camera_id: int
-    violation_type: str
-    severity_level: Optional[str] = "WARNING"
-    worker_code: Optional[str] = None
-    video_bucket: Optional[str] = None
-    video_path: Optional[str] = None
-    image_path: Optional[str] = None
-    ai_metadata: Optional[Dict[str, Any]] = None
+from pydantic import BaseModel, ConfigDict
 
 
 class ViolationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
+    event_id: UUID
     camera_id: int
+    track_id: str
     detected_time: datetime
     violation_type: str
     severity_level: str
-    worker_code: Optional[str] = None
-    video_bucket: Optional[str] = None
-    video_path: Optional[str] = None
-    image_path: Optional[str] = None
+    confidence: float | None
+    zone_id: int | None
+    violation_codes: list[str] | None
+    evidence_status: str
+    image_storage_key: str | None
+    video_storage_key: str | None
     status: str
-    reviewed_by: Optional[int] = None
-    reviewed_at: Optional[datetime] = None
-    ai_metadata: Optional[Dict[str, Any]] = None
+    reviewed_by: int | None
+    reviewed_at: datetime | None
     created_at: datetime
+    updated_at: datetime
 
-    class Config:
-        from_attributes = True
+
+class ViolationStatusUpdate(BaseModel):
+    status: Literal["REVIEWED", "DISMISSED", "RESOLVED"]
 
 
 class PresignedUrlOut(BaseModel):
     violation_id: int
-    video_url: Optional[str] = None
-    image_url: Optional[str] = None
+    video_url: str | None = None
+    image_url: str | None = None
     expires_in_seconds: int = 3600

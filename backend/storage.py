@@ -1,42 +1,117 @@
-"""
-Cloudflare R2 storage for evidence images/videos (S3-compatible API).
+"""Azure Blob Storage adapter used by the backend signer and verifier."""
+from __future__ import annotations
 
-Decided architecture: media goes to R2, the database only stores the
-object key (`evidence_key`). Uploads are asynchronous — the pipeline
-spools JPEGs to disk first (evidence_spool/) and an upload worker pushes
-them to R2 with retry, so a network outage never loses evidence.
-
-Required environment variables (put them in .env, never commit):
-    R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET
-"""
-import os
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 
-class R2Storage:
-    def __init__(self):
+@dataclass(frozen=True)
+class UploadLease:
+    url: str
+    headers: dict[str, str]
+    expires_in_seconds: int
+
+
+def _connection_string_parts(connection_string: str) -> dict[str, str]:
+    parts: dict[str, str] = {}
+    for component in connection_string.split(";"):
+        if not component or "=" not in component:
+            continue
+        key, value = component.split("=", 1)
+        parts[key.strip().lower()] = value.strip()
+    return parts
+
+
+class AzureBlobStorage:
+    def __init__(
+        self,
+        *,
+        connection_string: str,
+        container: str,
+        public_blob_endpoint: str | None = None,
+        create_container: bool = False,
+    ) -> None:
         try:
-            import boto3
-        except ImportError:
-            raise RuntimeError("boto3 is not installed. Please run 'pip install boto3' to use Cloudflare R2 storage.")
-            
-        account_id = os.environ.get("R2_ACCOUNT_ID", "")
-        self.bucket = os.environ.get("R2_BUCKET", "industrial-safety-evidence")
-        self.client = boto3.client(
-            "s3",
-            endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
-            aws_access_key_id=os.environ.get("R2_ACCESS_KEY_ID", ""),
-            aws_secret_access_key=os.environ.get("R2_SECRET_ACCESS_KEY", ""),
-            region_name="auto",
+            from azure.core.exceptions import ResourceExistsError
+            from azure.storage.blob import BlobServiceClient
+        except ImportError as exc:
+            raise RuntimeError("azure-storage-blob is required for evidence storage") from exc
+
+        connection_parts = _connection_string_parts(connection_string)
+        self.account_name = connection_parts.get("accountname", "")
+        self.account_key = connection_parts.get("accountkey", "")
+        if not self.account_name or not self.account_key:
+            raise ValueError(
+                "AZURE_STORAGE_CONNECTION_STRING must contain AccountName and AccountKey"
+            )
+
+        self.container = container
+        self.public_blob_endpoint = (
+            public_blob_endpoint.rstrip("/") if public_blob_endpoint else None
+        )
+        self.client = BlobServiceClient.from_connection_string(
+            connection_string, api_version="2025-11-05"
+        )
+        self.container_client = self.client.get_container_client(container)
+        if create_container:
+            try:
+                self.container_client.create_container()
+            except ResourceExistsError:
+                pass
+
+    def _blob_url(self, key: str) -> str:
+        if self.public_blob_endpoint:
+            return (
+                f"{self.public_blob_endpoint}/{quote(self.container, safe='')}"
+                f"/{quote(key, safe='/')}"
+            )
+        return self.container_client.get_blob_client(key).url
+
+    def create_upload_lease(
+        self, key: str, content_type: str, expires_seconds: int
+    ) -> UploadLease:
+        from azure.storage.blob import BlobSasPermissions, generate_blob_sas
+
+        now = datetime.now(timezone.utc)
+        token = generate_blob_sas(
+            account_name=self.account_name,
+            container_name=self.container,
+            blob_name=key,
+            account_key=self.account_key,
+            permission=BlobSasPermissions(create=True, write=True),
+            start=now - timedelta(minutes=5),
+            expiry=now + timedelta(seconds=expires_seconds),
+        )
+        return UploadLease(
+            url=f"{self._blob_url(key)}?{token}",
+            headers={
+                "Content-Type": content_type,
+                "x-ms-blob-type": "BlockBlob",
+                "x-ms-blob-content-type": content_type,
+            },
+            expires_in_seconds=expires_seconds,
         )
 
-    def upload(self, local_path, key):
-        """Upload one evidence file; caller deletes the spool file on success."""
-        self.client.upload_file(local_path, self.bucket, key)
+    def create_download_url(self, key: str, expires_seconds: int) -> str:
+        from azure.storage.blob import BlobSasPermissions, generate_blob_sas
 
-    def presigned_url(self, key, expires_seconds=3600):
-        """Short-lived URL the dashboard uses to display evidence images."""
-        return self.client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self.bucket, "Key": key},
-            ExpiresIn=expires_seconds,
+        now = datetime.now(timezone.utc)
+        token = generate_blob_sas(
+            account_name=self.account_name,
+            container_name=self.container,
+            blob_name=key,
+            account_key=self.account_key,
+            permission=BlobSasPermissions(read=True),
+            start=now - timedelta(minutes=5),
+            expiry=now + timedelta(seconds=expires_seconds),
         )
+        return f"{self._blob_url(key)}?{token}"
+
+    def head(self, key: str) -> dict[str, object]:
+        properties = self.container_client.get_blob_client(key).get_blob_properties()
+        return {
+            "size_bytes": int(properties.size),
+            "etag": str(properties.etag).strip('"') or None,
+            "content_type": properties.content_settings.content_type,
+        }

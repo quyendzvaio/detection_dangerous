@@ -1,14 +1,19 @@
-"""Standalone multi-process Layer 0-2 visual test."""
+"""Standalone multi-process Layer 0-2 visual and backend integration test."""
 from __future__ import annotations
 
 import argparse
 import multiprocessing as mp
+import os
 import time
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Iterable
 
 import cv2
 
+from ai_engine.contracts.event_schema import CameraStatus, CameraStatusEvent
+from ai_engine.events import EventBus, HttpEventTransport
+from ai_engine.evidence import EvidenceCapture, EvidenceUploader
 from ai_engine.inference.pose_client import PoseClient
 from ai_engine.ingest.camera_stream import CameraConfig, CameraIngest
 from ai_engine.ingest.layer0_multi_runner import parse_camera_spec
@@ -31,6 +36,14 @@ class DemoOptions:
     duration: float
     show: bool
     layer2_models: ModelToggles
+    backend_event_url: str | None
+    ai_service_token: str | None
+    event_buffer_size: int
+    evidence_enabled: bool
+    evidence_spool_dir: str
+    evidence_sample_fps: float
+    evidence_pre_seconds: float
+    evidence_post_seconds: float
 
 
 def parse_layer2_models(raw: str) -> ModelToggles:
@@ -50,16 +63,103 @@ def draw_overlay(
     draw_tracking_overlay(frame, tracked, metrics, overlay_store)
 
 
+def register_runtime_cameras(
+    cameras: list[CameraConfig], options: DemoOptions, timeout: float = 5.0
+) -> None:
+    """Create/update DB camera rows before child processes begin sending events."""
+    if options.backend_event_url is None:
+        return
+
+    import requests
+
+    internal_base = options.backend_event_url.rsplit("/", 1)[0]
+    headers = {"Authorization": f"Bearer {options.ai_service_token}"}
+    for camera in cameras:
+        response = requests.put(
+            f"{internal_base}/cameras/{camera.camera_id}",
+            json={
+                "camera_key": camera.camera_key,
+                "name": camera.camera_key,
+                "source": str(camera.source),
+                "zone_enabled": options.layer2_models.zone,
+                "fall_enabled": options.layer2_models.fall,
+                "ppe_enabled": options.layer2_models.ppe,
+            },
+            headers=headers,
+            timeout=timeout,
+        )
+        if response.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Camera {camera.camera_key} registration failed: "
+                f"HTTP {response.status_code} {response.text[:500]}"
+            )
+        action = "created" if response.status_code == 201 else "updated"
+        print(f"[pipeline:{camera.camera_key}] backend camera {action}", flush=True)
+
+
 def run_camera_process(
     config: CameraConfig, options: DemoOptions, stop_event: mp.synchronize.Event
 ) -> None:
     prefix = f"[pipeline:{config.camera_key}]"
-    ingest = CameraIngest(
-        config,
-        status_callback=lambda status, message: print(
-            f"{prefix} {status}: {message}", flush=True
-        ),
-    )
+    event_bus = None
+    if options.backend_event_url is not None:
+        event_bus = EventBus(
+            HttpEventTransport(
+                event_url=options.backend_event_url,
+                service_token=options.ai_service_token,
+            ),
+            max_buffer=options.event_buffer_size,
+        )
+
+    evidence_uploader = None
+    evidence_capture = None
+    if options.evidence_enabled:
+        if options.backend_event_url is None or not options.ai_service_token:
+            raise RuntimeError("Evidence upload requires backend URL and AI service token")
+        camera_spool = Path(options.evidence_spool_dir)
+        evidence_uploader = EvidenceUploader(
+            options.backend_event_url,
+            options.ai_service_token,
+            camera_spool / config.camera_key,
+        )
+        evidence_capture = EvidenceCapture(
+            config.camera_key,
+            camera_spool,
+            evidence_uploader.submit,
+            sample_fps=options.evidence_sample_fps,
+            pre_seconds=options.evidence_pre_seconds,
+            post_seconds=options.evidence_post_seconds,
+        )
+
+    last_camera_status: CameraStatus | None = None
+
+    def publish_camera_status(raw_status: str, message: str) -> None:
+        nonlocal last_camera_status
+        mapped = {
+            "ONLINE": CameraStatus.ONLINE,
+            "OFFLINE": CameraStatus.OFFLINE,
+            "EOF": CameraStatus.OFFLINE,
+        }.get(raw_status)
+        if event_bus is None or mapped is None:
+            return
+        if mapped == last_camera_status:
+            return
+        last_camera_status = mapped
+        event_bus.publish(
+            CameraStatusEvent(
+                camera_id=config.camera_id,
+                status=mapped,
+                observed_at=time.time(),
+                reason=message,
+                source="CAMERA_PROCESS",
+            )
+        )
+
+    def on_ingest_status(status: str, message: str) -> None:
+        print(f"{prefix} {status}: {message}", flush=True)
+        publish_camera_status(status, message)
+
+    ingest = CameraIngest(config, status_callback=on_ingest_status)
     pose = PoseClient(
         url=options.triton_url,
         conf_thresh=options.confidence,
@@ -71,6 +171,10 @@ def run_camera_process(
 
     def on_layer2_event(event) -> None:
         overlay_store.apply_event(event)
+        if event_bus is not None:
+            event_bus.publish(event)
+        if evidence_capture is not None:
+            evidence_capture.submit_event(event)
         print(
             f"{prefix} {event.violation_type.value} "
             f"track={event.track_id} payload={event.to_backend_payload()}",
@@ -111,6 +215,8 @@ def run_camera_process(
                 print(f"{prefix} POSE_OR_TRACKER_ERROR: {exc}", flush=True)
                 time.sleep(0.2)
                 continue
+            if evidence_capture is not None:
+                evidence_capture.observe(tracked)
             layer2.dispatch(tracked)
             if options.show:
                 visual = tracked.frame_bgr.copy()
@@ -132,7 +238,11 @@ def run_camera_process(
                 break
     finally:
         ingest.stop()
+        publish_camera_status("OFFLINE", "Camera process stopped")
         layer2.close()
+        if evidence_capture is not None:
+            evidence_capture.close(timeout=12.0)
+            print(f"{prefix} evidence_capture={evidence_capture.stats()}", flush=True)
         if options.show:
             cv2.destroyAllWindows()
         print(f"{prefix} layer2={layer2.metrics()}", flush=True)
@@ -143,6 +253,12 @@ def run_camera_process(
             f"e2e={snapshot.end_to_end_ms:.1f}ms, stale_drops={stale_drops}",
             flush=True,
         )
+        if event_bus is not None:
+            event_bus.close(timeout=5.0)
+            print(f"{prefix} event_bus={event_bus.stats()}", flush=True)
+        if evidence_uploader is not None:
+            evidence_uploader.close(timeout=20.0)
+            print(f"{prefix} evidence_uploader={evidence_uploader.stats()}", flush=True)
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -169,14 +285,53 @@ def main(argv: Iterable[str] | None = None) -> int:
         metavar="MODELS",
         help="comma-separated: zone,fall,ppe (Re-ID is outside this phase)",
     )
+    parser.add_argument(
+        "--backend-event-url",
+        default=os.getenv("BACKEND_EVENT_URL") or None,
+        help="enable backend publishing, e.g. http://localhost:8080/api/v1/internal/events",
+    )
+    parser.add_argument(
+        "--ai-service-token",
+        default=os.getenv("AI_SERVICE_TOKEN") or None,
+        help="Bearer token for internal backend endpoints",
+    )
+    parser.add_argument("--event-buffer-size", type=int, default=200)
+    parser.add_argument(
+        "--evidence",
+        action="store_true",
+        default=os.getenv("EVIDENCE_ENABLED", "0").lower() in {"1", "true", "yes"},
+        help="capture evidence and upload directly to object storage using backend-signed URLs",
+    )
+    parser.add_argument(
+        "--evidence-spool-dir",
+        default=os.getenv("EVIDENCE_SPOOL_DIR", "evidence_spool"),
+    )
+    parser.add_argument("--evidence-sample-fps", type=float, default=8.0)
+    parser.add_argument("--evidence-pre-seconds", type=float, default=5.0)
+    parser.add_argument("--evidence-post-seconds", type=float, default=5.0)
+    parser.add_argument(
+        "--skip-camera-registration",
+        action="store_true",
+        help="require camera rows to already exist in the backend",
+    )
     args = parser.parse_args(argv)
     if len({camera.camera_id for camera in args.camera}) != len(args.camera):
         parser.error("Camera IDs must be unique")
     if len({camera.camera_key for camera in args.camera}) != len(args.camera):
         parser.error("Camera keys must be unique")
+    if args.backend_event_url and not args.ai_service_token:
+        parser.error("--ai-service-token is required when backend publishing is enabled")
+    if args.event_buffer_size <= 0:
+        parser.error("--event-buffer-size must be positive")
+    if args.evidence and not args.backend_event_url:
+        parser.error("--evidence requires --backend-event-url")
+    if min(
+        args.evidence_sample_fps,
+        args.evidence_pre_seconds,
+        args.evidence_post_seconds,
+    ) <= 0:
+        parser.error("evidence fps/pre/post values must be positive")
 
-    context = mp.get_context("spawn")
-    stop_event = context.Event()
     options = DemoOptions(
         args.triton_url,
         args.confidence,
@@ -185,7 +340,20 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.duration,
         args.show,
         args.layer2_models,
+        args.backend_event_url,
+        args.ai_service_token,
+        args.event_buffer_size,
+        args.evidence,
+        args.evidence_spool_dir,
+        args.evidence_sample_fps,
+        args.evidence_pre_seconds,
+        args.evidence_post_seconds,
     )
+    if options.backend_event_url and not args.skip_camera_registration:
+        register_runtime_cameras(args.camera, options)
+
+    context = mp.get_context("spawn")
+    stop_event = context.Event()
     processes = [
         context.Process(
             target=run_camera_process,

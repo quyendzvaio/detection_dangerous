@@ -7,6 +7,12 @@ tritonclient[grpc]>=2.40.0  # Client gRPC gọi Triton (yolo_pose + osnet + ppe 
 boxmot>=19.0.0              # BoT-SORT tracking (appearance-free) trên detections thô
 psycopg2-binary>=2.9.9      # PostgreSQL driver cho SQLAlchemy (backend)
 sqlalchemy>=2.0.0           # ORM Database Toolkit (backend)
+fastapi>=0.115              # Layer 4 HTTP API
+uvicorn[standard]>=0.30     # ASGI server for FastAPI
+pydantic>=2.8               # Typed request/response validation
+alembic>=1.13               # Versioned PostgreSQL migrations
+requests>=2.31              # EventBus HTTP transport
+azure-storage-blob>=12.30,<13   # Backend Azure Blob SAS URLs and verification
 
 # ==============================================================================
 # EXPORT-ONLY DEPENDENCIES (export_scripts/ - dùng khi export .pt/.keras -> .onnx)
