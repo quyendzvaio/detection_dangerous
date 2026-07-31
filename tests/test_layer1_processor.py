@@ -28,7 +28,7 @@ class FakeTracker:
 
 def captured_frame() -> CapturedFrame:
     image = np.zeros((120, 160, 3), dtype=np.uint8)
-    return CapturedFrame(1, "cam1", 12, 1000.0, image, 160, 120)
+    return CapturedFrame(1, "cam1", 1000.0, image, 160, 120)
 
 
 class FakeBoxMot:
@@ -50,11 +50,10 @@ def test_botsort_adapter_uses_detection_index_for_keypoints() -> None:
 def test_layer1_outputs_camera_prefixed_track_and_capture_timestamp() -> None:
     processor = Layer1Processor("cam1", FakePose(), FakeTracker())
     tracked, metrics = processor.process(captured_frame())
-    assert tracked.sequence_id == 12
     assert len(tracked.persons) == 1
     person = tracked.persons[0]
     assert person.track_id == "cam1-7"
-    assert person.timestamp == tracked.captured_at == 1000.0
+    assert tracked.captured_at == 1000.0
     assert metrics.processed_frames == 1
     assert metrics.active_tracks == 1
 

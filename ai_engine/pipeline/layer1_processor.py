@@ -91,7 +91,6 @@ class Layer1Processor:
                 bbox_xyxy=match.bbox_xyxy,
                 keypoints=match.keypoints,
                 detection_confidence=match.score,
-                timestamp=captured.captured_at,
             )
             for match in matches
         )
@@ -100,7 +99,6 @@ class Layer1Processor:
         tracked = TrackedFrame(
             camera_id=captured.camera_id,
             camera_key=captured.camera_key,
-            sequence_id=captured.sequence_id,
             captured_at=captured.captured_at,
             frame_bgr=captured.frame_bgr,
             frame_width=captured.frame_width,

@@ -1,13 +1,10 @@
-version: '3.8'
-
 services:
   triton-server:
     image: nvcr.io/nvidia/tritonserver:24.01-py3
-    container_name: factory_triton_server
     ports:
       - "8000:8000" # http
       - "8001:8001" # grpc
-      - "8002:8002" # matrics
+      - "8002:8002" # metrics
     volumes:
       - ./triton_model_repo:/models
     command: [ "tritonserver", "--model-repository=/models" ]

@@ -46,7 +46,7 @@ def main() -> int:
                 if args.show:
                     cv2.putText(
                         frame.frame_bgr,
-                        f"seq={frame.sequence_id} age={age_ms:.0f}ms",
+                        f"age={age_ms:.0f}ms",
                         (12, 28),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.7,

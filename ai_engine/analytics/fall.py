@@ -28,6 +28,7 @@ with different failure modes meaningfully reduces missed falls.
 import json
 import math
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -146,6 +147,26 @@ def resample_sequence(sequence, target_len):
     ).astype(np.float32)
 
 
+def resample_sequence_at_timestamps(sequence, timestamps, target_len):
+    """Resample a sequence onto evenly spaced capture timestamps."""
+    sequence = np.asarray(sequence, dtype=np.float32)
+    timestamps = np.asarray(timestamps, dtype=np.float64)
+    if len(sequence) != len(timestamps):
+        raise ValueError("sequence and timestamps must have the same length")
+    if len(sequence) == 1:
+        return np.repeat(sequence, target_len, axis=0)
+    unique_times, unique_indices = np.unique(timestamps, return_index=True)
+    sequence = sequence[unique_indices]
+    if len(unique_times) == 1:
+        return np.repeat(sequence[:1], target_len, axis=0)
+    target_times = np.linspace(unique_times[0], unique_times[-1], target_len)
+    return np.stack(
+        [np.interp(target_times, unique_times, sequence[:, col])
+         for col in range(sequence.shape[1])],
+        axis=1,
+    ).astype(np.float32)
+
+
 def add_motion_features(sequence_51):
     """(T, 51) -> (T, 85): append per-joint xy velocity clipped to [-5, 5]."""
     xy = sequence_51[:, _XY_COLS]
@@ -175,11 +196,15 @@ class TrackKeypointBuffer:
 
     def window(self, track_id, now):
         """Frames inside [now - window_seconds, now], oldest first."""
+        return [keypoints for _, keypoints in self.timed_window(track_id, now)]
+
+    def timed_window(self, track_id, now):
+        """Timestamped frames inside [now - window_seconds, now], oldest first."""
         buf = self._buffers.get(track_id)
         if not buf:
             return []
         start = now - self.window_seconds
-        return [kps for ts, kps in buf if ts >= start]
+        return [(ts, kps) for ts, kps in buf if ts >= start]
 
     def drop_track(self, track_id):
         self._buffers.pop(track_id, None)
@@ -214,6 +239,22 @@ class FallPreprocessor:
         features = add_motion_features(sequence)
         if features.shape != (self.config.max_frames, self.config.num_features):
             raise ValueError(f'Unexpected feature shape {features.shape}')
+        return features
+
+    def transform_timed(self, timed_frames):
+        """Like transform, but resamples against capture timestamps."""
+        if len(timed_frames) < self.config.min_real_points:
+            return None
+        timestamps, frames = zip(*timed_frames)
+        normalized = np.stack(
+            [normalize_pose_frame(frame, self.config.min_kp_conf) for frame in frames]
+        )
+        sequence = resample_sequence_at_timestamps(
+            interpolate_missing(normalized), timestamps, self.config.max_frames
+        )
+        features = add_motion_features(sequence)
+        if features.shape != (self.config.max_frames, self.config.num_features):
+            raise ValueError(f"Unexpected feature shape {features.shape}")
         return features
 
 
@@ -271,6 +312,55 @@ class FallDecision:
     def drop_track(self, track_id):
         self._history.pop(track_id, None)
         self._last_fired.pop(track_id, None)
+
+
+@dataclass(frozen=True)
+class FallAnalysis:
+    """One analyzer result; probability=None means the window is not ready."""
+
+    camera_id: int
+    camera_key: str
+    track_id: str
+    captured_at: float
+    probability: float | None
+    alert_fired: bool
+    sample_count: int
+
+
+class FallProcessor:
+    """Layer 2 temporal Fall branch consuming lightweight FallTask values."""
+
+    def __init__(self, config, detector, decision=None, inference_interval_s=0.25):
+        self.config = config
+        self.detector = detector
+        self.preprocessor = FallPreprocessor(config)
+        self.buffer = TrackKeypointBuffer(window_seconds=config.window_seconds)
+        self.decision = decision or FallDecision(config.threshold)
+        self.inference_interval_s = float(inference_interval_s)
+        self._last_inference = {}
+
+    def process(self, task):
+        self.buffer.push(task.track_id, task.keypoints, task.captured_at)
+        self.buffer.prune(task.captured_at)
+        timed_frames = self.buffer.timed_window(task.track_id, task.captured_at)
+        last = self._last_inference.get(task.track_id)
+        if last is not None and task.captured_at - last < self.inference_interval_s:
+            return FallAnalysis(task.camera_id, task.camera_key, task.track_id,
+                                task.captured_at, None, False, len(timed_frames))
+        features = self.preprocessor.transform_timed(timed_frames)
+        if features is None:
+            return FallAnalysis(task.camera_id, task.camera_key, task.track_id,
+                                task.captured_at, None, False, len(timed_frames))
+        probability = self.detector.predict(features)
+        self._last_inference[task.track_id] = task.captured_at
+        fired = self.decision.update(task.track_id, probability, task.captured_at)
+        return FallAnalysis(task.camera_id, task.camera_key, task.track_id,
+                            task.captured_at, probability, fired, len(timed_frames))
+
+    def drop_track(self, track_id):
+        self.buffer.drop_track(track_id)
+        self.decision.drop_track(track_id)
+        self._last_inference.pop(track_id, None)
 
 
 class HeuristicFallDetector:

@@ -70,6 +70,13 @@ class CameraStream:
         ok, frame = self._cap.read()
         return frame if ok else None
 
+    def frame_interval_seconds(self) -> float:
+        """Source frame interval; only used to pace finite video-file demos."""
+        if self._cap is None:
+            return 1.0 / max(self.config.fps, 1)
+        fps = float(self._cap.get(cv2.CAP_PROP_FPS))
+        return 1.0 / (fps if fps > 0.0 else self.config.fps)
+
     def release(self) -> None:
         if self._cap is not None:
             self._cap.release()
@@ -91,7 +98,6 @@ class CameraIngest:
         self._stream = CameraStream(config)
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
-        self._sequence_id = 0
         self.reconnect_count = 0
 
     def start(self) -> None:
@@ -151,12 +157,15 @@ class CameraIngest:
             captured = CapturedFrame(
                 camera_id=self.config.camera_id,
                 camera_key=self.config.camera_key,
-                sequence_id=self._sequence_id,
                 captured_at=time.time(),
                 frame_bgr=frame,
                 frame_width=width,
                 frame_height=height,
             )
-            self._sequence_id += 1
             self.buffer.publish(captured)
+            if not self.config.is_live_source:
+                # File input has no hardware clock; preserve its native pace so
+                # visual demos and temporal fall windows use real elapsed time.
+                if self._stop.wait(self._stream.frame_interval_seconds()):
+                    return True
         return True

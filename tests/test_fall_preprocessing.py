@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from ai_engine.analytics.fall import (  # noqa: E402
     KP, FallConfig, FallDecision, FallPreprocessor, HeuristicFallDetector,
     TrackKeypointBuffer, add_motion_features, interpolate_missing,
-    normalize_pose_frame, resample_sequence,
+    normalize_pose_frame, resample_sequence, resample_sequence_at_timestamps,
 )
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / 'weights/fall_model/inference_config.json'
@@ -81,6 +81,12 @@ def test_resample_produces_target_length_and_keeps_endpoints():
     out = resample_sequence(seq, 60)
     assert out.shape == (60, 51)
     assert np.isclose(out[0, 0], 0.0) and np.isclose(out[-1, 0], 1.0)
+
+
+def test_timestamp_resample_follows_capture_time_not_frame_count():
+    seq = np.array([[0.0], [10.0], [20.0]], dtype=np.float32)
+    out = resample_sequence_at_timestamps(seq, [0.0, 1.0, 1.1], 3)
+    assert np.allclose(out[:, 0], [0.0, 5.5, 20.0])
 
 
 def test_add_motion_features_shape_and_clip():

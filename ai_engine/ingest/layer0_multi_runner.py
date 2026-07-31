@@ -55,7 +55,7 @@ def run_camera_process(config: CameraConfig, options: RunnerOptions, stop_event:
                 if options.show:
                     cv2.putText(
                         frame.frame_bgr,
-                        f"{config.camera_key} seq={frame.sequence_id} age={age_ms:.0f}ms",
+                        f"{config.camera_key} age={age_ms:.0f}ms",
                         (12, 28),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.7,

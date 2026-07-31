@@ -2,7 +2,7 @@
 Export YOLO11n-pose to ONNX for Triton with a uint8 input baked into the graph.
 
 Why uint8-in-graph: the preprocessed pose tensor is the heaviest thing crossing
-gRPC (see docs/ARCHITECTURE.md, Serving section). Sending uint8 (1 byte/value)
+gRPC (see docs/PRODUCT_PIPELINE.md, Serving section). Sending uint8 (1 byte/value)
 instead of float32 (4 bytes) cuts the payload 4x. The `Cast -> Div(255)` that
 would run on the CPU is moved into the graph, so the GPU does it and the wire
 carries raw bytes. Camera frames are already uint8, so this is numerically exact.

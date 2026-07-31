@@ -10,7 +10,7 @@ The worker holds NO model. Each frame it produces a list of TrackedPerson
 (bbox, stable track_id, 17 keypoints, timestamp) — the single upstream feed the
 four analytics branches (Re-ID, PPE, Zone, Fall) consume.
 
-Real-time invariants (docs/ARCHITECTURE.md):
+Real-time invariants (docs/PRODUCT_PIPELINE.md):
   - latest-frame-only: grab() drains the driver buffer, only the newest frame
     is decoded — inference falling behind drops frames instead of queueing.
   - the pose call is synchronous, so exactly one request per worker is ever
