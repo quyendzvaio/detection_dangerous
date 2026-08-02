@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import timezone
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
@@ -121,26 +121,14 @@ class ViolationService:
             return duplicate, False
 
     @staticmethod
-    def update_status(
-        db: Session, violation_id: int, new_status: str, reviewer_id: int
-    ) -> Violation:
-        violation = ViolationService.get_violation_by_id(db, violation_id)
-        if violation is None:
-            raise HTTPException(status_code=404, detail="Violation not found")
-        violation.status = new_status
-        violation.reviewed_by = reviewer_id
-        violation.reviewed_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(violation)
-        return violation
-
-    @staticmethod
     def get_presigned_urls(
         db: Session, violation_id: int, expires_in_seconds: int = 3600
     ) -> PresignedUrlOut:
         violation = ViolationService.get_violation_by_id(db, violation_id)
         if violation is None:
             raise HTTPException(status_code=404, detail="Violation not found")
+        if violation.evidence_status != "READY":
+            raise HTTPException(status_code=409, detail="Evidence is not ready")
         return PresignedUrlOut(
             violation_id=violation.id,
             video_url=storage_service.generate_signed_download(

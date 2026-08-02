@@ -5,6 +5,8 @@ import argparse
 import multiprocessing as mp
 import os
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Iterable
@@ -44,6 +46,117 @@ class DemoOptions:
     evidence_sample_fps: float
     evidence_pre_seconds: float
     evidence_post_seconds: float
+    runtime_config_poll_seconds: float
+    preview_fps: float
+
+
+class RuntimeConfigClient:
+    def __init__(self, event_url: str, service_token: str, camera_id: int) -> None:
+        import requests
+
+        internal_base = event_url.rsplit("/", 1)[0]
+        self.config_url = f"{internal_base}/cameras/{camera_id}/runtime-config"
+        self.ack_url = f"{self.config_url}/ack"
+        self.telemetry_url = f"{internal_base}/cameras/{camera_id}/telemetry"
+        self.frame_url = f"{internal_base}/cameras/{camera_id}/frame"
+        self.headers = {"Authorization": f"Bearer {service_token}"}
+        self.session = requests.Session()
+        self.frame_session = requests.Session()
+        self.frame_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="frame-publish"
+        )
+        self.frame_future: Future | None = None
+        self.applied_revision: int | None = None
+
+    def poll_and_apply(self, runtime: Layer2Runtime, timeout: float = 3.0) -> bool:
+        response = self.session.get(self.config_url, headers=self.headers, timeout=timeout)
+        response.raise_for_status()
+        payload = response.json()
+        revision = int(payload["revision"])
+        if revision == self.applied_revision:
+            return False
+        models = {
+            "zone": bool(payload["zone_enabled"]),
+            "fall": bool(payload["fall_enabled"]),
+            "ppe": bool(payload["ppe_enabled"]),
+        }
+        try:
+            runtime.set_models(**models)
+            runtime.set_zones(payload.get("zones", []))
+            ack_payload = {
+                "revision": revision,
+                "status": "APPLIED",
+                "zone_enabled": models["zone"],
+                "fall_enabled": models["fall"],
+                "ppe_enabled": models["ppe"],
+            }
+        except Exception as exc:
+            ack_payload = {
+                "revision": revision,
+                "status": "FAILED",
+                "zone_enabled": models["zone"],
+                "fall_enabled": models["fall"],
+                "ppe_enabled": models["ppe"],
+                "error": str(exc)[:1000],
+            }
+        ack = self.session.post(
+            self.ack_url, json=ack_payload, headers=self.headers, timeout=timeout
+        )
+        ack.raise_for_status()
+        if ack_payload["status"] == "FAILED":
+            raise RuntimeError(ack_payload["error"])
+        self.applied_revision = revision
+        return True
+
+    def close(self) -> None:
+        self.frame_executor.shutdown(wait=True, cancel_futures=True)
+        self.frame_session.close()
+        self.session.close()
+
+    def publish_telemetry(
+        self, metrics: Layer1MetricsSnapshot, last_frame_at: float, timeout: float = 3.0
+    ) -> None:
+        response = self.session.post(
+            self.telemetry_url,
+            json={
+                "processing_fps": metrics.processing_fps,
+                "latency_ms": metrics.end_to_end_ms,
+                "last_frame_at": datetime.fromtimestamp(
+                    last_frame_at, timezone.utc
+                ).isoformat(),
+            },
+            headers=self.headers,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+
+    def _publish_frame(self, frame, overlay: bool, timeout: float = 3.0) -> None:
+        encoded, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 78])
+        if not encoded:
+            raise RuntimeError("JPEG encoding failed")
+        response = self.frame_session.post(
+            self.frame_url,
+            params={"overlay": str(overlay).lower()},
+            data=jpeg.tobytes(),
+            headers={**self.headers, "Content-Type": "image/jpeg"},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+
+    def submit_frames(self, raw_frame, annotated_frame) -> bool:
+        """Drop a preview update while the previous one is still uploading."""
+        if self.frame_future is not None and not self.frame_future.done():
+            return False
+        if self.frame_future is not None:
+            self.frame_future.result()
+        self.frame_future = self.frame_executor.submit(
+            self._publish_frame_pair, raw_frame.copy(), annotated_frame.copy()
+        )
+        return True
+
+    def _publish_frame_pair(self, raw_frame, annotated_frame) -> None:
+        self._publish_frame(raw_frame, overlay=False)
+        self._publish_frame(annotated_frame, overlay=True)
 
 
 def parse_layer2_models(raw: str) -> ModelToggles:
@@ -58,9 +171,13 @@ def parse_layer2_models(raw: str) -> ModelToggles:
 
 
 def draw_overlay(
-    frame, tracked, metrics: Layer1MetricsSnapshot, overlay_store: OverlayStateStore
+    frame,
+    tracked,
+    metrics: Layer1MetricsSnapshot,
+    overlay_store: OverlayStateStore,
+    zones=(),
 ) -> None:
-    draw_tracking_overlay(frame, tracked, metrics, overlay_store)
+    draw_tracking_overlay(frame, tracked, metrics, overlay_store, zones=zones)
 
 
 def register_runtime_cameras(
@@ -184,6 +301,11 @@ def run_camera_process(
     def on_track_update(update) -> None:
         overlay_store.apply_update(update)
 
+    def on_models_changed(previous: ModelToggles, current: ModelToggles) -> None:
+        for branch in Layer2Runtime.BRANCHES:
+            if getattr(previous, branch) and not getattr(current, branch):
+                overlay_store.clear_branch(branch)
+
     layer2 = Layer2Runtime(
         CameraLayer2Config(
             camera_id=config.camera_id,
@@ -193,13 +315,34 @@ def run_camera_process(
         ),
         on_event=on_layer2_event,
         on_track_update=on_track_update,
+        on_models_changed=on_models_changed,
     )
     layer2.start()
+    runtime_config = None
+    if options.backend_event_url is not None and options.ai_service_token:
+        runtime_config = RuntimeConfigClient(
+            options.backend_event_url, options.ai_service_token, config.camera_id
+        )
+        try:
+            runtime_config.poll_and_apply(layer2)
+        except Exception as exc:
+            print(f"{prefix} RUNTIME_CONFIG_ERROR: {exc}", flush=True)
+    next_config_poll = time.monotonic() + options.runtime_config_poll_seconds
+    next_telemetry_publish = time.monotonic() + 2.0
+    next_frame_publish = time.monotonic()
     stale_drops = 0
     ingest.start()
     started = time.monotonic()
     try:
         while not stop_event.is_set():
+            now = time.monotonic()
+            if runtime_config is not None and now >= next_config_poll:
+                try:
+                    if runtime_config.poll_and_apply(layer2):
+                        print(f"{prefix} runtime config applied", flush=True)
+                except Exception as exc:
+                    print(f"{prefix} RUNTIME_CONFIG_ERROR: {exc}", flush=True)
+                next_config_poll = now + options.runtime_config_poll_seconds
             captured = ingest.buffer.take_latest(timeout=0.5)
             if captured is None:
                 if not ingest.is_alive():
@@ -215,12 +358,28 @@ def run_camera_process(
                 print(f"{prefix} POSE_OR_TRACKER_ERROR: {exc}", flush=True)
                 time.sleep(0.2)
                 continue
+            if runtime_config is not None and time.monotonic() >= next_telemetry_publish:
+                try:
+                    runtime_config.publish_telemetry(metrics, captured.captured_at)
+                except Exception as exc:
+                    print(f"{prefix} TELEMETRY_ERROR: {exc}", flush=True)
+                next_telemetry_publish = time.monotonic() + 2.0
             if evidence_capture is not None:
                 evidence_capture.observe(tracked)
             layer2.dispatch(tracked)
+            if runtime_config is not None and time.monotonic() >= next_frame_publish:
+                try:
+                    annotated = tracked.frame_bgr.copy()
+                    visible_zones = layer2.zones() if layer2.models().zone else ()
+                    draw_overlay(annotated, tracked, metrics, overlay_store, visible_zones)
+                    runtime_config.submit_frames(tracked.frame_bgr, annotated)
+                except Exception as exc:
+                    print(f"{prefix} FRAME_PUBLISH_ERROR: {exc}", flush=True)
+                next_frame_publish = time.monotonic() + (1.0 / options.preview_fps)
             if options.show:
                 visual = tracked.frame_bgr.copy()
-                draw_overlay(visual, tracked, metrics, overlay_store)
+                visible_zones = layer2.zones() if layer2.models().zone else ()
+                draw_overlay(visual, tracked, metrics, overlay_store, visible_zones)
                 cv2.putText(
                     visual,
                     f"stale drops: {stale_drops}",
@@ -256,6 +415,8 @@ def run_camera_process(
         if event_bus is not None:
             event_bus.close(timeout=5.0)
             print(f"{prefix} event_bus={event_bus.stats()}", flush=True)
+        if runtime_config is not None:
+            runtime_config.close()
         if evidence_uploader is not None:
             evidence_uploader.close(timeout=20.0)
             print(f"{prefix} evidence_uploader={evidence_uploader.stats()}", flush=True)
@@ -297,6 +458,17 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     parser.add_argument("--event-buffer-size", type=int, default=200)
     parser.add_argument(
+        "--runtime-config-poll-seconds",
+        type=float,
+        default=float(os.getenv("RUNTIME_CONFIG_POLL_SECONDS", "1")),
+    )
+    parser.add_argument(
+        "--preview-fps",
+        type=float,
+        default=float(os.getenv("WEB_PREVIEW_FPS", "10")),
+        help="maximum browser preview frame rate",
+    )
+    parser.add_argument(
         "--evidence",
         action="store_true",
         default=os.getenv("EVIDENCE_ENABLED", "0").lower() in {"1", "true", "yes"},
@@ -323,6 +495,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         parser.error("--ai-service-token is required when backend publishing is enabled")
     if args.event_buffer_size <= 0:
         parser.error("--event-buffer-size must be positive")
+    if args.runtime_config_poll_seconds <= 0:
+        parser.error("--runtime-config-poll-seconds must be positive")
+    if not 0 < args.preview_fps <= 30:
+        parser.error("--preview-fps must be between 0 and 30")
     if args.evidence and not args.backend_event_url:
         parser.error("--evidence requires --backend-event-url")
     if min(
@@ -348,6 +524,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.evidence_sample_fps,
         args.evidence_pre_seconds,
         args.evidence_post_seconds,
+        args.runtime_config_poll_seconds,
+        args.preview_fps,
     )
     if options.backend_event_url and not args.skip_camera_registration:
         register_runtime_cameras(args.camera, options)

@@ -93,6 +93,13 @@ class DropOldestQueue:
     def qsize(self) -> int:
         return self._queue.qsize()
 
+    def clear(self) -> None:
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                return
+
 
 class Layer2Control:
     """Thread-safe per-camera model switches for the active product branches."""
@@ -118,6 +125,26 @@ class Layer2Control:
             return self._models
 
 
+class PPEStateStabilizer:
+    """Require repeated PPE observations before changing visible/event state."""
+
+    def __init__(self, required_observations: int = 2) -> None:
+        self.required_observations = required_observations
+        self._candidates: dict[str, tuple[tuple[int, int, int, int], int]] = {}
+        self._stable: dict[str, tuple[int, int, int, int]] = {}
+
+    def observe(
+        self, track_id: str, state: tuple[int, int, int, int]
+    ) -> tuple[int, int, int, int] | None:
+        candidate, count = self._candidates.get(track_id, (state, 0))
+        count = count + 1 if candidate == state else 1
+        self._candidates[track_id] = (state, count)
+        current = self._stable.get(track_id)
+        if count < self.required_observations and current != state:
+            return None
+        self._stable[track_id] = state
+        return state
+
 class Layer2Runtime:
     """Dispatcher plus one consumer thread per active branch for one camera."""
 
@@ -128,11 +155,13 @@ class Layer2Runtime:
         config: CameraLayer2Config,
         on_event: Callable[[SafetyEvent], None] | None = None,
         on_track_update: Callable[[LocalTrackUpdate], None] | None = None,
+        on_models_changed: Callable[[ModelToggles, ModelToggles], None] | None = None,
     ) -> None:
         self.config = config
         self.control = Layer2Control(config.models)
         self.on_event = on_event or (lambda event: None)
         self.on_track_update = on_track_update or (lambda update: None)
+        self.on_models_changed = on_models_changed or (lambda previous, current: None)
         self._queues = {name: DropOldestQueue(config.queue_size) for name in self.BRANCHES}
         self._processed = {name: 0 for name in self.BRANCHES}
         self._dispatched = {name: 0 for name in self.BRANCHES}
@@ -140,6 +169,12 @@ class Layer2Runtime:
         self._threads: list[threading.Thread] = []
         self._last_ppe: dict[str, float] = {}
         self._last_ppe_state: dict[str, tuple[int, int, int, int]] = {}
+        self._ppe_stabilizer = PPEStateStabilizer()
+        self._zone_lock = threading.Lock()
+        self._zones = config.zones
+        self._zone_revision = 0
+        self._branch_epoch_lock = threading.Lock()
+        self._branch_epochs = {name: 0 for name in self.BRANCHES}
 
     def start(self) -> None:
         if self._threads:
@@ -161,7 +196,37 @@ class Layer2Runtime:
         self._threads.clear()
 
     def set_models(self, **changes: bool) -> ModelToggles:
-        return self.control.set_models(**changes)
+        previous = self.control.models()
+        current = self.control.set_models(**changes)
+        with self._branch_epoch_lock:
+            for branch in self.BRANCHES:
+                if getattr(previous, branch) == getattr(current, branch):
+                    continue
+                self._branch_epochs[branch] += 1
+                if not getattr(current, branch):
+                    self._queues[branch].clear()
+        if previous.ppe and not current.ppe:
+            self._last_ppe.clear()
+            self._last_ppe_state.clear()
+        if previous != current:
+            self.on_models_changed(previous, current)
+        return current
+
+    def models(self) -> ModelToggles:
+        return self.control.models()
+
+    def _branch_epoch(self, branch: str) -> int:
+        with self._branch_epoch_lock:
+            return self._branch_epochs[branch]
+
+    def set_zones(self, zones: list[dict] | tuple[dict, ...]) -> None:
+        with self._zone_lock:
+            self._zones = tuple(zones)
+            self._zone_revision += 1
+
+    def zones(self) -> tuple[dict, ...]:
+        with self._zone_lock:
+            return self._zones
 
     def dispatch(self, tracked: TrackedFrame) -> None:
         """Fast non-blocking fan-out from Layer 1 into enabled branches."""
@@ -176,6 +241,8 @@ class Layer2Runtime:
                         person.track_id,
                         person.bbox_xyxy.copy(),
                         tracked.captured_at,
+                        tracked.frame_width,
+                        tracked.frame_height,
                     ),
                 )
             if models.fall:
@@ -263,13 +330,35 @@ class Layer2Runtime:
             print(f"[layer2:{self.config.camera_key}] track update callback error: {exc}", flush=True)
 
     def _run_zone(self) -> None:
-        checker = ZoneChecker(list(self.config.zones))
+        checker = ZoneChecker()
+        loaded_revision = -1
         while not self._stop.is_set():
             try:
                 task: ZoneTask = self._queues["zone"].get(0.2)
             except queue.Empty:
                 continue
+            if not self.control.models().zone:
+                continue
+            with self._zone_lock:
+                revision = self._zone_revision
+                zones = self._zones
+            if loaded_revision != revision:
+                checker.set_zones(
+                    [
+                        {
+                            **zone,
+                            "polygon": [
+                                [point[0] * task.frame_width, point[1] * task.frame_height]
+                                for point in zone["polygon"]
+                            ],
+                        }
+                        for zone in zones
+                    ]
+                )
+                loaded_revision = revision
             for zone in checker.check(task.track_id, task.bbox_xyxy):
+                if not self.control.models().zone:
+                    break
                 self._emit(
                     RestrictedZoneEvent(
                         camera_id=task.camera_id,
@@ -288,17 +377,24 @@ class Layer2Runtime:
             / "inference_config.json"
         )
         processor = None
+        processor_epoch = -1
         while not self._stop.is_set():
             try:
                 task: FallTask = self._queues["fall"].get(0.2)
             except queue.Empty:
                 continue
-            if processor is None:
+            epoch = self._branch_epoch("fall")
+            if not self.control.models().fall:
+                continue
+            if processor is None or processor_epoch != epoch:
                 processor = FallProcessor(
                     FallConfig.from_json(config_path),
                     TritonFallDetector(url=self.config.triton_url),
                 )
+                processor_epoch = epoch
             result = processor.process(task)
+            if not self.control.models().fall or self._branch_epoch("fall") != epoch:
+                continue
             if result.probability is not None:
                 self._update(
                     "fall",
@@ -321,6 +417,7 @@ class Layer2Runtime:
 
     def _run_ppe(self) -> None:
         detector = None
+        processor_epoch = -1
         flag_to_code = (
             ("no_helmet", PpeViolationCode.NO_HELMET),
             ("no_glasses", PpeViolationCode.NO_GLASSES),
@@ -332,18 +429,37 @@ class Layer2Runtime:
                 task: PpeTask = self._queues["ppe"].get(0.2)
             except queue.Empty:
                 continue
+            epoch = self._branch_epoch("ppe")
+            if not self.control.models().ppe:
+                continue
+            if processor_epoch != epoch:
+                self._ppe_stabilizer = PPEStateStabilizer()
+                self._last_ppe_state.clear()
+                processor_epoch = epoch
             try:
                 detector = detector or PPEDetector()
                 flags = detector.detect_violations(
                     get_crop(task.person_crop_bgr, task.relative_keypoints)
                 )
-                self._update("ppe", task.track_id, task.captured_at, **flags)
+                if not self.control.models().ppe or self._branch_epoch("ppe") != epoch:
+                    continue
                 state = tuple(int(flags[name]) for name, _ in flag_to_code)
+                stable_state = self._ppe_stabilizer.observe(task.track_id, state)
+                if stable_state is None:
+                    self._processed["ppe"] += 1
+                    continue
+                stable_flags = {
+                    name: bool(value)
+                    for (name, _), value in zip(flag_to_code, stable_state)
+                }
+                self._update("ppe", task.track_id, task.captured_at, **stable_flags)
                 previous = self._last_ppe_state.get(task.track_id)
-                if any(state):
-                    if previous != state:
+                if any(stable_state):
+                    if previous != stable_state:
                         codes = tuple(
-                            code for (name, code), enabled in zip(flag_to_code, state) if enabled
+                            code
+                            for (_, code), enabled in zip(flag_to_code, stable_state)
+                            if enabled
                         )
                         self._emit(
                             PPEViolationEvent(
@@ -353,7 +469,7 @@ class Layer2Runtime:
                                 violation_codes=codes,
                             )
                         )
-                    self._last_ppe_state[task.track_id] = state
+                    self._last_ppe_state[task.track_id] = stable_state
                 else:
                     self._last_ppe_state.pop(task.track_id, None)
             except Exception as exc:

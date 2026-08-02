@@ -7,6 +7,7 @@ from ai_engine.pipeline.layer2_runtime import (
     Layer2Control,
     Layer2Runtime,
     ModelToggles,
+    PPEStateStabilizer,
 )
 
 
@@ -53,3 +54,42 @@ def test_reid_is_not_an_accepted_model_toggle():
         raise AssertionError("ReID toggle should not be accepted in this phase")
     except ValueError:
         pass
+
+
+def test_disabling_models_drains_queued_work_and_stops_new_dispatch():
+    changes = []
+    runtime = Layer2Runtime(
+        CameraLayer2Config(
+            camera_id=1,
+            camera_key="cam1",
+            models=ModelToggles(zone=True, fall=True, ppe=True),
+        ),
+        on_models_changed=lambda previous, current: changes.append((previous, current)),
+    )
+    runtime.dispatch(tracked_frame())
+    runtime.set_models(zone=False, fall=False, ppe=False)
+
+    disabled = runtime.metrics()
+    assert disabled.queue_depths == {"zone": 0, "fall": 0, "ppe": 0}
+    assert runtime.models() == ModelToggles(zone=False, fall=False, ppe=False)
+    assert changes == [
+        (
+            ModelToggles(zone=True, fall=True, ppe=True),
+            ModelToggles(zone=False, fall=False, ppe=False),
+        )
+    ]
+
+    runtime.dispatch(tracked_frame())
+    assert runtime.metrics().dispatched == disabled.dispatched
+
+
+def test_ppe_state_requires_two_matching_observations_before_transition():
+    stabilizer = PPEStateStabilizer(required_observations=2)
+    violation = (1, 0, 0, 0)
+    safe = (0, 0, 0, 0)
+    assert stabilizer.observe("cam1-7", violation) is None
+    assert stabilizer.observe("cam1-7", safe) is None
+    assert stabilizer.observe("cam1-7", violation) is None
+    assert stabilizer.observe("cam1-7", violation) == violation
+    assert stabilizer.observe("cam1-7", safe) is None
+    assert stabilizer.observe("cam1-7", safe) == safe

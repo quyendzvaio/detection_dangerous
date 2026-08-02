@@ -7,6 +7,8 @@ from typing import Optional, Union, Any
 
 from backend.core.config import settings
 
+import bcrypt
+
 # Try PyJWT first, fallback to native hmac-sha256 token if PyJWT is not installed
 try:
     import jwt
@@ -16,14 +18,23 @@ except ImportError:
 
 
 def hash_password(password: str) -> str:
-    """Simple SHA-256 / salted hash for password storage."""
-    salt = "industrial_safety_salt_"
-    return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+    """Hash a password with an adaptive, per-password bcrypt salt."""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify plain text password against stored hash."""
-    return hash_password(plain_password) == hashed_password
+    """Verify bcrypt hashes, with a temporary fallback for legacy local users."""
+    if hashed_password.startswith(("$2a$", "$2b$", "$2y$")):
+        try:
+            return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+        except ValueError:
+            return False
+    legacy = hashlib.sha256(("industrial_safety_salt_" + plain_password).encode("utf-8")).hexdigest()
+    return hmac.compare_digest(legacy, hashed_password)
+
+
+def password_hash_needs_upgrade(hashed_password: str) -> bool:
+    return not hashed_password.startswith(("$2a$", "$2b$", "$2y$"))
 
 
 def _b64_encode(data: bytes) -> str:

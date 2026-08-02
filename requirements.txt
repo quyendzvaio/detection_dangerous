@@ -13,6 +13,7 @@ pydantic>=2.8               # Typed request/response validation
 alembic>=1.13               # Versioned PostgreSQL migrations
 requests>=2.31              # EventBus HTTP transport
 azure-storage-blob>=12.30,<13   # Backend Azure Blob SAS URLs and verification
+imageio-ffmpeg>=0.5,<1      # Bundled FFmpeg: encode fall evidence as browser-compatible H.264
 
 # ==============================================================================
 # EXPORT-ONLY DEPENDENCIES (export_scripts/ - dùng khi export .pt/.keras -> .onnx)

@@ -1,7 +1,9 @@
+import subprocess
 import time
 from pathlib import Path
 
 import cv2
+import imageio_ffmpeg
 import numpy as np
 
 from ai_engine.contracts.event_schema import (
@@ -100,6 +102,23 @@ def test_fall_capture_creates_thumbnail_and_pre_post_mp4(tmp_path):
     assert set(files) == {"IMAGE", "VIDEO"}
     assert files["IMAGE"].stat().st_size > 0
     assert files["VIDEO"].stat().st_size > 0
+    probe = subprocess.run(
+        [
+            imageio_ffmpeg.get_ffmpeg_exe(),
+            "-hide_banner",
+            "-i",
+            str(files["VIDEO"]),
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert "Video: h264" in probe.stderr
+    assert "yuv420p" in probe.stderr
 
 
 class FakeResponse:

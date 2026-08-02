@@ -250,7 +250,7 @@ SAS URL là bearer credential có quyền và thời hạn hẹp; ai có URL cò
 | `FALL_DETECTED` | IMAGE + VIDEO | Thumbnail và clip mặc định 5 giây trước + 5 giây sau |
 | `FALL_SUSPECTED` | IMAGE | Contract sẵn; producer chưa bật |
 
-Frame evidence được lấy mẫu mặc định 8 FPS, JPEG quality 82. Encode JPEG/MP4 chạy ngoài hot loop; frame queue chỉ có hai slot và bỏ frame evidence cũ khi chậm. Ring buffer giữ JPEG đã nén, không giữ hàng trăm raw BGR frame trong RAM. Fall MP4 hiện dùng codec `mp4v`; cần kiểm tra khả năng phát của frontend mục tiêu trước khi chốt codec production/H.264.
+Frame evidence được lấy mẫu mặc định 8 FPS, JPEG quality 82. Encode JPEG/MP4 chạy ngoài hot loop; frame queue chỉ có hai slot và bỏ frame evidence cũ khi chậm. Ring buffer giữ JPEG đã nén, không giữ hàng trăm raw BGR frame trong RAM. Fall MP4 dùng H.264 (`libx264`), `yuv420p` và `faststart` để phát ổn định trên trình duyệt; clip `mp4v` cũ phải chuyển mã nếu cần giữ lại.
 
 ### Blob key và database
 

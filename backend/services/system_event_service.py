@@ -40,6 +40,13 @@ class SystemEventService:
             source=event.source,
         )
         camera.status = event.status
+        camera.last_seen_at = observed_at
+        if event.status == "OFFLINE":
+            camera.config_status = "OFFLINE"
+        elif camera.applied_revision == camera.config_revision:
+            camera.config_status = "APPLIED"
+        else:
+            camera.config_status = "PENDING"
         db.add(record)
         try:
             db.commit()

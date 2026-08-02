@@ -47,6 +47,16 @@ services:
       timeout: 3s
       retries: 20
 
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:80"
+
   triton-server:
     image: nvcr.io/nvidia/tritonserver:24.01-py3
     ports:

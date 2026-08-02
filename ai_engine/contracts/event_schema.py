@@ -68,6 +68,8 @@ class ZoneTask:
     track_id: str
     bbox_xyxy: np.ndarray
     captured_at: float
+    frame_width: int
+    frame_height: int
 
 
 @dataclass(frozen=True)

@@ -60,6 +60,20 @@
   margin-bottom: 16px;
 }
 
+.headerActions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.liveGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.liveTile { min-width: 0; overflow: hidden; border: 1px solid var(--outline-variant); border-radius: var(--radius-lg); background: var(--surface-low); }
+.liveViewport { position: relative; aspect-ratio: 16/9; display: grid; place-items: center; overflow: hidden; background: #111827; color: #94a3b8; }
+.liveViewport img { width: 100%; height: 100%; object-fit: contain; }
+.liveViewport > span:first-child { font-size: 48px; }
+.liveStatus { position: absolute; top: 8px; left: 8px; padding: 3px 7px; border-radius: 6px; background: #374151; color: #f8fafc; font-size: 10px; font-weight: 700; }
+.liveOnline { background: #166534; }
+.liveMeta { display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; color: var(--on-surface); font-size: 12px; }
+.liveMeta small { display: block; margin-top: 3px; overflow: hidden; color: var(--on-surface-variant); text-overflow: ellipsis; white-space: nowrap; }
+.liveMeta > span:first-child { min-width: 0; }
+.liveMeta > span:last-child { flex: none; color: var(--on-surface-variant); font: 11px/1.5 monospace; text-align: right; }
+
 .cardTitle {
   font-size: 16px;
   font-weight: 600;
@@ -172,4 +186,12 @@
   font-size: 11px;
   color: var(--on-surface-variant);
   margin-top: 4px;
+}
+
+.cameraList { display: grid; gap: 8px; }.cameraList button { width: 100%; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 12px; border: 0; border-radius: var(--radius-md); background: var(--surface-low); color: var(--on-surface); text-align: left; cursor: pointer; }.cameraList small { display: block; margin-top: 3px; color: var(--on-surface-variant); }.cameraState { width: 9px; height: 9px; border-radius: 50%; background: var(--on-surface-variant); }.cameraOnline { background: var(--color-success); }.cameraTelemetry { color: var(--on-surface-variant); font: 12px/1.5 monospace; text-align: right; }
+.metricCard[role="button"] { cursor: pointer; }.metricCard[role="button"]:focus-visible { outline: 2px solid var(--primary-container); outline-offset: 2px; }
+
+@media (max-width: 767px) {
+  .cardHeader { align-items: flex-start; flex-direction: column; }
+  .liveGrid { grid-template-columns: 1fr; }
 }

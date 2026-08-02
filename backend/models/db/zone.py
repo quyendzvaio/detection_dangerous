@@ -23,6 +23,7 @@ class Zone(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     camera = relationship("Camera", back_populates="zones")
     violations = relationship("Violation", back_populates="zone")

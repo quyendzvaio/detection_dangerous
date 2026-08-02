@@ -1,21 +1,27 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import styles from './LoginPage.module.css';
+import { ApiError, login } from '@/services';
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (email && password) {
-      // Mock login success and redirect to dashboard
-      console.log('Logged in successfully:', email);
+    setError('');
+    setSubmitting(true);
+    try {
+      await login(email, password);
       navigate('/');
-    } else {
-      alert('Vui lòng điền đầy đủ email và mật khẩu.');
+    } catch (reason) {
+      setError(reason instanceof ApiError ? reason.message : 'Không thể kết nối máy chủ.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -51,12 +57,7 @@ export default function LoginPage() {
 
         {/* Password Field */}
         <div className="input-group">
-          <div className={styles.labelWrapper}>
-            <label className="input-label" htmlFor="password">Mật khẩu</label>
-            <a href="#" className={styles.forgotLink} onClick={(e) => { e.preventDefault(); alert('Chức năng khôi phục mật khẩu đang phát triển.'); }}>
-              Quên mật khẩu?
-            </a>
-          </div>
+          <div className={styles.labelWrapper}><label className="input-label" htmlFor="password">Mật khẩu</label></div>
           <div className="input-wrapper">
             <span className="material-symbols-outlined input-icon">lock</span>
             <input
@@ -82,8 +83,9 @@ export default function LoginPage() {
         </div>
 
         {/* Submit Button */}
-        <button type="submit" className="btn btn-primary styles.submitBtn" style={{ width: '100%' }}>
-          Đăng nhập
+        {error && <p role="alert" style={{ color: 'var(--danger-color, #dc2626)', margin: 0 }}>{error}</p>}
+        <button type="submit" disabled={submitting} className="btn btn-primary styles.submitBtn" style={{ width: '100%' }}>
+          {submitting ? 'Đang đăng nhập...' : 'Đăng nhập'}
           <span className="material-symbols-outlined text-sm">arrow_forward</span>
         </button>
       </form>

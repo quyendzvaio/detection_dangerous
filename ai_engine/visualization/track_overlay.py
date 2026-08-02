@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass, replace
 
 import cv2
+import numpy as np
 
 from ai_engine.contracts.event_schema import (
     FallDetectedEvent,
@@ -137,6 +138,22 @@ class OverlayStateStore:
                     current, fall_detected=False, fall_probability=None
                 )
 
+    def clear_branch(self, branch: str) -> None:
+        """Remove visible state when a per-camera analysis branch is disabled."""
+        if branch not in {"fall", "ppe", "zone"}:
+            raise ValueError(f"Unknown overlay branch: {branch}")
+        with self._lock:
+            for track_id, current in tuple(self._states.items()):
+                if branch == "fall":
+                    current = replace(
+                        current, fall_detected=False, fall_probability=None
+                    )
+                elif branch == "ppe":
+                    current = replace(current, ppe_violations=())
+                else:
+                    current = replace(current, zones=())
+                self._states[track_id] = current
+
     def snapshot(self) -> dict[str, TrackOverlayState]:
         with self._lock:
             return dict(self._states)
@@ -148,14 +165,16 @@ def _short_track_id(track_id: str) -> str:
 
 def _style(state: TrackOverlayState | None):
     if state is None:
-        return GREEN, ""
+        return GREEN, "NORMAL"
     if state.fall_detected:
-        return RED, "FALL"
+        return RED, "CRITICAL FALL"
     if state.zones:
-        return ORANGE, "ZONE"
+        return ORANGE, "DANGER ZONE"
     if state.ppe_violations:
-        return ORANGE, f"PPE {len(state.ppe_violations)}"
-    return GREEN, ""
+        return ORANGE, f"DANGER PPE {len(state.ppe_violations)}"
+    if state.fall_probability is not None:
+        return YELLOW, "WARNING FALL"
+    return GREEN, "NORMAL"
 
 
 def _draw_label(frame, text: str, origin: tuple[int, int], color) -> None:
@@ -176,8 +195,11 @@ def _draw_label(frame, text: str, origin: tuple[int, int], color) -> None:
     )
 
 
-def draw_tracking_overlay(frame, tracked, metrics, store: OverlayStateStore) -> None:
+def draw_tracking_overlay(
+    frame, tracked, metrics, store: OverlayStateStore, zones=()
+) -> None:
     """Draw compact bboxes and a small alert panel; no pose skeleton."""
+    _draw_zones(frame, zones)
     store.mark_seen((person.track_id for person in tracked.persons), tracked.captured_at)
     states = store.snapshot()
 
@@ -194,6 +216,20 @@ def draw_tracking_overlay(frame, tracked, metrics, store: OverlayStateStore) -> 
 
     _draw_metrics(frame, metrics)
     _draw_alert_panel(frame, states)
+
+
+def _draw_zones(frame, zones) -> None:
+    height, width = frame.shape[:2]
+    for zone in zones:
+        polygon = np.asarray(
+            [[point[0] * width, point[1] * height] for point in zone["polygon"]],
+            dtype=np.int32,
+        )
+        if len(polygon) < 3:
+            continue
+        cv2.polylines(frame, [polygon], True, ORANGE, 2, cv2.LINE_AA)
+        x, y = polygon[0]
+        _draw_label(frame, str(zone.get("name", "ZONE"))[:24], (int(x), int(y)), ORANGE)
 
 
 def _draw_metrics(frame, metrics) -> None:

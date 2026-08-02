@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -26,10 +25,6 @@ class ViolationOut(BaseModel):
     reviewed_at: datetime | None
     created_at: datetime
     updated_at: datetime
-
-
-class ViolationStatusUpdate(BaseModel):
-    status: Literal["REVIEWED", "DISMISSED", "RESOLVED"]
 
 
 class PresignedUrlOut(BaseModel):

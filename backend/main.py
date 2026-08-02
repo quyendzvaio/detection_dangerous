@@ -6,7 +6,7 @@ from sqlalchemy import text
 from backend.api.v1.api import api_router
 from backend.core.config import settings
 from backend.db.session import engine
-from backend.ws import alerts_endpoint
+from backend.ws import alerts_endpoint, camera_frames_endpoint
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -41,3 +41,10 @@ def readiness():
 @app.websocket("/ws/alerts")
 async def websocket_alerts(websocket: WebSocket):
     await alerts_endpoint(websocket)
+
+
+@app.websocket("/ws/cameras/{camera_id}")
+async def websocket_camera_frames(
+    websocket: WebSocket, camera_id: int, overlay: bool = True
+):
+    await camera_frames_endpoint(websocket, camera_id, overlay)

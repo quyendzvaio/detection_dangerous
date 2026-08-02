@@ -4,13 +4,13 @@ import {
   DashboardPage,
   CamerasPage,
   ViolationsPage,
-  ReportsPage,
   SettingsPage,
   HelpPage,
   LoginPage,
   RegisterPage
 } from '@/pages';
 import useTheme from '@/hooks/useTheme';
+import { ProtectedRoute } from '@/components';
 import './App.css';
 
 function App() {
@@ -27,13 +27,14 @@ function App() {
         </Route>
 
         {/* Dashboard layout wrapper */}
-        <Route element={<MainLayout />}>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/cameras" element={<CamerasPage />} />
-          <Route path="/violations" element={<ViolationsPage />} />
-          <Route path="/reports" element={<ReportsPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/help" element={<HelpPage />} />
+        <Route element={<ProtectedRoute />}>
+          <Route element={<MainLayout />}>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/cameras" element={<CamerasPage />} />
+            <Route path="/violations" element={<ViolationsPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/help" element={<HelpPage />} />
+          </Route>
         </Route>
       </Routes>
     </BrowserRouter>

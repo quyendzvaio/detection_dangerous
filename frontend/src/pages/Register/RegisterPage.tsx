@@ -1,33 +1,33 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import styles from './RegisterPage.module.css';
+import { ApiError, register } from '@/services';
 
 export default function RegisterPage() {
   const navigate = useNavigate();
-  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [agreeTerms, setAgreeTerms] = useState(false);
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!fullName || !email || !password || !confirmPassword) {
-      alert('Vui lòng nhập đầy đủ thông tin.');
-      return;
-    }
+    setError('');
     if (password !== confirmPassword) {
-      alert('Mật khẩu xác nhận không khớp.');
-      return;
-    }
-    if (!agreeTerms) {
-      alert('Bạn phải đồng ý với Điều khoản dịch vụ và Chính sách bảo mật.');
+      setError('Mật khẩu xác nhận không khớp.');
       return;
     }
 
-    console.log('User registered:', { fullName, email });
-    alert('Đăng ký tài khoản thành công! Quay lại trang đăng nhập.');
-    navigate('/login');
+    setSubmitting(true);
+    try {
+      await register(email, password);
+      navigate('/login', { replace: true });
+    } catch (reason) {
+      setError(reason instanceof ApiError ? reason.message : 'Không thể kết nối máy chủ.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -40,33 +40,16 @@ export default function RegisterPage() {
 
       {/* Register Form */}
       <form className={styles.form} onSubmit={handleSubmit}>
-        {/* Full Name */}
-        <div className="input-group">
-          <label className="input-label" htmlFor="fullName">Họ và Tên</label>
-          <div className="input-wrapper">
-            <span className="material-symbols-outlined input-icon">person</span>
-            <input
-              type="text"
-              id="fullName"
-              className="input-field"
-              placeholder="Nhập họ và tên"
-              required
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-            />
-          </div>
-        </div>
-
         {/* Work Email */}
         <div className="input-group">
-          <label className="input-label" htmlFor="email">Email Công Việc</label>
+          <label className="input-label" htmlFor="email">Gmail</label>
           <div className="input-wrapper">
             <span className="material-symbols-outlined input-icon">mail</span>
             <input
               type="email"
               id="email"
               className="input-field"
-              placeholder="name@company.com"
+              placeholder="name@gmail.com"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -108,30 +91,10 @@ export default function RegisterPage() {
           </div>
         </div>
 
-        {/* Terms and Conditions Checkbox */}
-        <div className={styles.checkboxWrapper}>
-          <input
-            type="checkbox"
-            id="terms"
-            className={styles.checkbox}
-            checked={agreeTerms}
-            onChange={(e) => setAgreeTerms(e.target.checked)}
-          />
-          <label htmlFor="terms" className={styles.checkboxLabel}>
-            Tôi đồng ý với{' '}
-            <a href="#" className={styles.termsLink} onClick={(e) => { e.preventDefault(); alert('Điều khoản dịch vụ'); }}>
-              Điều khoản dịch vụ
-            </a>{' '}
-            và{' '}
-            <a href="#" className={styles.termsLink} onClick={(e) => { e.preventDefault(); alert('Chính sách bảo mật'); }}>
-              Chính sách bảo mật
-            </a>.
-          </label>
-        </div>
-
         {/* Submit Button */}
-        <button type="submit" className="btn btn-primary styles.submitBtn" style={{ width: '100%' }}>
-          Tạo Tài Khoản
+        {error && <p role="alert" style={{ color: 'var(--danger-color, #dc2626)', margin: 0 }}>{error}</p>}
+        <button type="submit" disabled={submitting} className="btn btn-primary styles.submitBtn" style={{ width: '100%' }}>
+          {submitting ? 'Đang tạo...' : 'Tạo tài khoản'}
         </button>
       </form>
 

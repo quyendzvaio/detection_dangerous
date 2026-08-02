@@ -1,7 +1,9 @@
 import { NavLink, Link, useNavigate, useLocation, Outlet } from 'react-router-dom';
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import useTheme from '@/hooks/useTheme';
 import styles from './MainLayout.module.css';
+import { logout } from '@/services';
+import useAlertsRealtime from '@/hooks/useAlertsRealtime';
 
 interface NotificationItem {
   id: string;
@@ -16,46 +18,20 @@ export default function MainLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { theme, toggleTheme } = useTheme();
-  const [emergencyAlertActive, setEmergencyAlertActive] = useState(false);
   
-  const [notifications, setNotifications] = useState<NotificationItem[]>([
-    {
-      id: '1',
-      type: 'danger',
-      title: 'Phát hiện xâm nhập',
-      message: 'Khu vực cổng A (Camera 03) phát hiện chuyển động bất thường.',
-      time: '2 phút trước',
-      read: false,
-    },
-    {
-      id: '2',
-      type: 'warning',
-      title: 'Mất kết nối Camera',
-      message: 'Camera hành lang phía Nam (Camera 05) mất kết nối mạng.',
-      time: '15 phút trước',
-      read: false,
-    },
-    {
-      id: '3',
-      type: 'success',
-      title: 'Cập nhật Model AI',
-      message: 'Phiên bản YOLOv8 Security Suite đã được nâng cấp lên v2.4.0 thành công.',
-      time: '1 giờ trước',
-      read: true,
-    },
-    {
-      id: '4',
-      type: 'info',
-      title: 'Sao lưu hệ thống',
-      message: 'Bản sao lưu tự động hàng tuần đã hoàn thành.',
-      time: '3 giờ trước',
-      read: true,
-    },
-  ]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
+  const receiveNotification = useCallback((message?: unknown) => {
+    if (!message) return;
+    const envelope = message as { event_category?: string };
+    const title = envelope.event_category === 'CAMERA_STATUS' ? 'Trạng thái camera thay đổi' : envelope.event_category === 'CONFIG_STATUS' ? 'Cấu hình runtime đã cập nhật' : 'Có cảnh báo an toàn mới';
+    const type: NotificationItem['type'] = envelope.event_category === 'SAFETY_EVENT' ? 'danger' : 'info';
+    setNotifications(items => [{id: crypto.randomUUID(), type, title, message: 'Dashboard đã đồng bộ dữ liệu mới từ backend.', time: new Date().toLocaleTimeString('vi-VN'), read: false}, ...items].slice(0, 20));
+  }, []);
+  useAlertsRealtime(receiveNotification);
+
   const notificationsRef = useRef<HTMLDivElement>(null);
-  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Close notifications dropdown when clicking outside
   useEffect(() => {
@@ -70,30 +46,6 @@ export default function MainLayout() {
     };
   }, []);
 
-  // Keyboard shortcut listener to focus search input
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (
-        event.key === '/' && 
-        document.activeElement !== searchInputRef.current && 
-        document.activeElement?.tagName !== 'INPUT' && 
-        document.activeElement?.tagName !== 'TEXTAREA'
-      ) {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-      } else if ((event.ctrlKey || event.metaKey) && event.key === 'k') {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-      } else if (event.key === 'Escape' && document.activeElement === searchInputRef.current) {
-        searchInputRef.current?.blur();
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, []);
-
   // Determine current page title
   const getPageTitle = (pathname: string) => {
     switch (pathname) {
@@ -105,8 +57,6 @@ export default function MainLayout() {
         return 'AI Model Configuration';
       case '/violations':
         return 'Safety Violations Log';
-      case '/reports':
-        return 'Analytics & Compliance Reports';
       case '/settings':
         return 'System Settings';
       case '/help':
@@ -114,12 +64,6 @@ export default function MainLayout() {
       default:
         return 'VisionGuard AI';
     }
-  };
-
-  const handleEmergencyAlert = () => {
-    setEmergencyAlertActive(true);
-    alert('🔴 EMERGENCY SYSTEM ALERT ACTIVATED! Broadcast sent to safety officers.');
-    setTimeout(() => setEmergencyAlertActive(false), 5000);
   };
 
   return (
@@ -135,17 +79,6 @@ export default function MainLayout() {
         </div>
         
         <div className={styles.headerRight}>
-          {/* Search bar */}
-          <div className={styles.searchWrapper}>
-            <span className={`material-symbols-outlined ${styles.searchIcon}`}>search</span>
-            <input 
-              ref={searchInputRef}
-              type="text" 
-              placeholder="Tìm kiếm..." 
-              className={styles.searchInput}
-            />
-          </div>
-
           {/* Theme Toggle */}
           <button 
             className={styles.iconBtn} 
@@ -227,7 +160,7 @@ export default function MainLayout() {
           <Link to="/" style={{ textDecoration: 'none' }}>
             <h1 className={styles.logoText}>VisionGuard AI</h1>
           </Link>
-          <p className={styles.logoSubText}>🔴 Command Monitoring Active</p>
+          <p className={styles.logoSubText}>Safety monitoring console</p>
         </div>
 
         <ul className={styles.navLinksList}>
@@ -261,15 +194,6 @@ export default function MainLayout() {
           </li>
           <li>
             <NavLink 
-              to="/reports" 
-              className={({ isActive }) => `${styles.navItem} ${isActive ? styles.navItemActive : ''}`}
-            >
-              <span className="material-symbols-outlined">assessment</span>
-              <span>Reports</span>
-            </NavLink>
-          </li>
-          <li>
-            <NavLink 
               to="/settings" 
               className={({ isActive }) => `${styles.navItem} ${isActive ? styles.navItemActive : ''}`}
             >
@@ -279,23 +203,13 @@ export default function MainLayout() {
           </li>
         </ul>
 
-        {/* Emergency Alert Action */}
-        <button 
-          className={styles.alertBtn} 
-          onClick={handleEmergencyAlert}
-          style={{ opacity: emergencyAlertActive ? 0.7 : 1 }}
-        >
-          <span className="material-symbols-outlined">emergency</span>
-          <span>Emergency Alert</span>
-        </button>
-
         {/* Sidebar Footer Link list */}
         <div className={styles.sidebarFooter}>
           <NavLink to="/help" className={styles.sidebarFooterItem}>
             <span className="material-symbols-outlined">help</span>
             <span>Help Center</span>
           </NavLink>
-          <Link to="/login" className={styles.sidebarFooterItem}>
+          <Link to="/login" className={styles.sidebarFooterItem} onClick={logout}>
             <span className="material-symbols-outlined">logout</span>
             <span>Logout</span>
           </Link>

@@ -1,743 +1,126 @@
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ApiError, camerasApi, type Camera } from '@/services';
+import { CameraLiveFrame } from '@/components';
 import styles from './CamerasPage.module.css';
+import ZoneEditor from './ZoneEditor';
 
-interface Camera {
-  id: string;
-  name: string;
-  location: string;
-  status: 'online' | 'offline';
-  ipAddress: string;
-  models: string[]; // List of active AI models
-  videoUrl?: string; // Optional URL for demo video
-}
+const blankCamera = { name: '', camera_key: '', source: '', location_desc: '' };
 
 export default function CamerasPage() {
-  const [cameras, setCameras] = useState<Camera[]>([
-    { id: '01', name: 'CAM-01', location: 'Cổng chính (Main Gate)', status: 'online', ipAddress: '192.168.1.101', models: ['YOLOv8 Security Suite'], videoUrl: 'https://assets.mixkit.co/videos/preview/mixkit-security-camera-footage-of-a-corridor-42404-large.mp4' },
-    { id: '02', name: 'CAM-02', location: 'Sảnh đón khách (Lobby)', status: 'online', ipAddress: '192.168.1.102', models: ['YOLOv8 Security Suite', 'PPE Classifier ResNet'], videoUrl: 'https://assets.mixkit.co/videos/preview/mixkit-people-walking-in-a-modern-office-43026-large.mp4' },
-    { id: '03', name: 'CAM-03', location: 'Kho hàng B (Warehouse B)', status: 'online', ipAddress: '192.168.1.103', models: ['YOLOv8 Security Suite'] },
-    { id: '04', name: 'CAM-04', location: 'Xưởng đóng gói (Packaging)', status: 'online', ipAddress: '192.168.1.104', models: ['YOLOv8 Security Suite', 'YOLOv5 Fire Detector'], videoUrl: 'https://assets.mixkit.co/videos/preview/mixkit-industrial-robotic-arms-welding-components-48906-large.mp4' },
-    { id: '05', name: 'CAM-05', location: 'Văn phòng hành chính', status: 'online', ipAddress: '192.168.1.105', models: ['YOLOv8 Security Suite', 'PPE Classifier ResNet', 'YOLOv5 Fire Detector'], videoUrl: 'https://assets.mixkit.co/videos/preview/mixkit-security-guard-monitoring-in-control-room-42401-large.mp4' },
-    { id: '06', name: 'CAM-06', location: 'Cổng phụ xe tải', status: 'offline', ipAddress: '192.168.1.106', models: [] }
-  ]);
+  const [cameras, setCameras] = useState<Camera[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState(blankCamera);
+  const [saving, setSaving] = useState(false);
+  const [overlay, setOverlay] = useState(true);
+  const [zoneCamera, setZoneCamera] = useState<Camera | null>(null);
+  const [zoomCamera, setZoomCamera] = useState<Camera | null>(null);
+  const [editingCamera, setEditingCamera] = useState<Camera | null>(null);
+  const [pendingToggles, setPendingToggles] = useState<Set<string>>(() => new Set());
+  const pendingTogglesRef = useRef(new Set<string>());
+  const cameraMutationVersion = useRef(0);
 
-  const [overlayActive, setOverlayActive] = useState(true);
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [newCamName, setNewCamName] = useState('');
-  const [newCamLoc, setNewCamLoc] = useState('');
-  const [newCamModels, setNewCamModels] = useState<string[]>(['YOLOv8 Security Suite']);
-  
-  // Video selection state for adding a camera
-  const [newCamVideoType, setNewCamVideoType] = useState<'preset' | 'local' | 'none'>('preset');
-  const [newCamVideoPreset, setNewCamVideoPreset] = useState('https://assets.mixkit.co/videos/preview/mixkit-security-camera-footage-of-a-corridor-42404-large.mp4');
-  const [newCamVideoFile, setNewCamVideoFile] = useState<File | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Zoomed camera details
-  const [zoomedCamId, setZoomedCamId] = useState<string | null>(null);
-  const [telemetryLogs, setTelemetryLogs] = useState<string[]>([]);
-  const [telemetryStats, setTelemetryStats] = useState({ fps: 30, latency: 12, cpu: 24 });
-
-  // Canvas drawing ref for a mock live stream inside the card (similar to Cam 03)
-  const canvasRefs = useRef<{ [key: string]: HTMLCanvasElement | null }>({});
+  const load = useCallback(async () => {
+    const versionAtStart = cameraMutationVersion.current;
+    setError('');
+    try {
+      const data = await camerasApi.list();
+      // Ignore a polling response that began before a model mutation. Without
+      // this guard a slow GET can repaint a switch with its previous value.
+      if (versionAtStart !== cameraMutationVersion.current) return;
+      setCameras(data);
+      setZoomCamera(current => current ? data.find(item => item.id === current.id) ?? null : null);
+      setZoneCamera(current => current ? data.find(item => item.id === current.id) ?? null : null);
+    }
+    catch (reason) { setError(reason instanceof ApiError ? reason.message : 'Không thể tải camera.'); }
+    finally { setLoading(false); }
+  }, []);
 
   useEffect(() => {
-    // Set up canvas animation for CAM-03 inside the cameras list & zoom modal
-    const canvas = canvasRefs.current['03'];
-    const zoomCanvas = canvasRefs.current['zoom-03'];
-    
-    let frameId: number;
-    const worker = { x: 50, y: 70, dx: 1.0, dy: 0.2 };
-    const workerZoom = { x: 100, y: 140, dx: 2.0, dy: 0.4 };
+    void load();
+    const timer = window.setInterval(() => void load(), 3000);
+    return () => window.clearInterval(timer);
+  }, [load]);
 
-    const animate = () => {
-      // Draw grid & box on small canvas
-      if (canvas && cameras.find(c => c.id === '03')?.status === 'online') {
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.fillStyle = '#0f172a';
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-          // Draw grid
-          ctx.strokeStyle = 'rgba(125, 211, 252, 0.05)';
-          ctx.lineWidth = 1;
-          for (let i = 0; i < canvas.width; i += 20) {
-            ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height); ctx.stroke();
-          }
-
-          // Move box
-          worker.x += worker.dx;
-          worker.y += worker.dy;
-          if (worker.x < 20 || worker.x > canvas.width - 60) worker.dx *= -1;
-          if (worker.y < 20 || worker.y > canvas.height - 70) worker.dy *= -1;
-
-          // Draw box overlay if enabled
-          if (overlayActive) {
-            ctx.strokeStyle = '#ef4444';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(worker.x, worker.y, 40, 60);
-
-            ctx.fillStyle = '#ef4444';
-            ctx.fillRect(worker.x, worker.y - 15, 40, 15);
-
-            ctx.fillStyle = '#ffffff';
-            ctx.font = '8px Inter';
-            ctx.fillText('NO-HELMET', worker.x + 2, worker.y - 4);
-
-            ctx.fillStyle = '#ef4444';
-            ctx.beginPath(); ctx.arc(worker.x + 20, worker.y + 10, 5, 0, Math.PI * 2); ctx.fill();
-          } else {
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-            ctx.lineWidth = 1.5;
-            ctx.strokeRect(worker.x, worker.y, 40, 60);
-          }
-
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-          ctx.font = '9px Courier New';
-          ctx.fillText(`CAM-03 LIVE FEED`, 10, 20);
-        }
-      }
-
-      // Draw grid & box on zoomed canvas
-      if (zoomCanvas && cameras.find(c => c.id === '03')?.status === 'online') {
-        const ctxZoom = zoomCanvas.getContext('2d');
-        if (ctxZoom) {
-          ctxZoom.fillStyle = '#0f172a';
-          ctxZoom.fillRect(0, 0, zoomCanvas.width, zoomCanvas.height);
-
-          // Draw grid
-          ctxZoom.strokeStyle = 'rgba(125, 211, 252, 0.05)';
-          ctxZoom.lineWidth = 1;
-          for (let i = 0; i < zoomCanvas.width; i += 40) {
-            ctxZoom.beginPath(); ctxZoom.moveTo(i, 0); ctxZoom.lineTo(i, zoomCanvas.height); ctxZoom.stroke();
-          }
-
-          // Move box
-          workerZoom.x += workerZoom.dx;
-          workerZoom.y += workerZoom.dy;
-          if (workerZoom.x < 40 || workerZoom.x > zoomCanvas.width - 120) workerZoom.dx *= -1;
-          if (workerZoom.y < 40 || workerZoom.y > zoomCanvas.height - 140) workerZoom.dy *= -1;
-
-          // Draw box overlay if enabled
-          if (overlayActive) {
-            ctxZoom.strokeStyle = '#ef4444';
-            ctxZoom.lineWidth = 3;
-            ctxZoom.strokeRect(workerZoom.x, workerZoom.y, 80, 120);
-
-            ctxZoom.fillStyle = '#ef4444';
-            ctxZoom.fillRect(workerZoom.x, workerZoom.y - 24, 80, 24);
-
-            ctxZoom.fillStyle = '#ffffff';
-            ctxZoom.font = '12px Inter';
-            ctxZoom.fillText('NO-HELMET', workerZoom.x + 6, workerZoom.y - 7);
-
-            ctxZoom.fillStyle = '#ef4444';
-            ctxZoom.beginPath(); ctxZoom.arc(workerZoom.x + 40, workerZoom.y + 20, 10, 0, Math.PI * 2); ctxZoom.fill();
-          } else {
-            ctxZoom.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-            ctxZoom.lineWidth = 2.5;
-            ctxZoom.strokeRect(workerZoom.x, workerZoom.y, 80, 120);
-          }
-
-          ctxZoom.fillStyle = 'rgba(255, 255, 255, 0.8)';
-          ctxZoom.font = '14px Courier New';
-          ctxZoom.fillText(`CAM-03 DETAILED ANALYTICS FEED`, 20, 35);
-        }
-      }
-
-      frameId = requestAnimationFrame(animate);
-    };
-
-    animate();
-    return () => cancelAnimationFrame(frameId);
-  }, [overlayActive, cameras, zoomedCamId]);
-
-  // Telemetry updates when zoom modal is open
-  const zoomedCam = cameras.find(c => c.id === zoomedCamId);
-  useEffect(() => {
-    const currentCam = cameras.find(c => c.id === zoomedCamId);
-    if (!zoomedCamId || !currentCam || currentCam.status === 'offline') return;
-
-    setTelemetryLogs([
-      `[${new Date().toLocaleTimeString()}] System: Camera connection established.`,
-      `[${new Date().toLocaleTimeString()}] AI Engine: Processing stream at 1080p...`
-    ]);
-
-    const statsInterval = setInterval(() => {
-      setTelemetryStats({
-        fps: Math.round(28 + Math.random() * 4),
-        latency: Math.round(10 + Math.random() * 8),
-        cpu: Math.round(20 + Math.random() * 15)
-      });
-    }, 1500);
-
-    const logsInterval = setInterval(() => {
-      const allowedDetections: string[] = [];
-      if (currentCam.models.includes('YOLOv8 Security Suite')) {
-        allowedDetections.push('PERSON', 'FORKLIFT', 'ROBOTIC_ARM');
-      }
-      if (currentCam.models.includes('PPE Classifier ResNet')) {
-        allowedDetections.push('HELMET', 'NO-HELMET', 'SAFETY-VEST');
-      }
-      if (currentCam.models.includes('YOLOv5 Fire Detector')) {
-        allowedDetections.push('FIRE', 'SMOKE', 'NORMAL_TEMP');
-      }
-      
-      if (allowedDetections.length === 0) {
-        allowedDetections.push('IDLE (No Active Models)');
-      }
-
-      const randomDet = allowedDetections[Math.floor(Math.random() * allowedDetections.length)];
-      const conf = randomDet.startsWith('IDLE') ? 100 : Math.round(85 + Math.random() * 14);
-      setTelemetryLogs(prev => [
-        `[${new Date().toLocaleTimeString()}] Detect: ${randomDet} (${conf}%)`,
-        ...prev.slice(0, 6)
-      ]);
-    }, 3000);
-
-    return () => {
-      clearInterval(statsInterval);
-      clearInterval(logsInterval);
-    };
-  }, [zoomedCamId, cameras]);
-
-  const toggleCameraPower = (id: string) => {
-    setCameras(prev => prev.map(c => {
-      if (c.id === id) {
-        const nextStatus = c.status === 'online' ? 'offline' : 'online';
-        return {
-          ...c,
-          status: nextStatus,
-          models: nextStatus === 'online' ? (c.models.length === 0 ? ['YOLOv8 Security Suite'] : c.models) : []
-        };
-      }
-      return c;
-    }));
-  };
-
-  const handleDeleteCamera = (id: string) => {
-    const cam = cameras.find(c => c.id === id);
-    if (!cam) return;
-    const confirmDelete = window.confirm(`Bạn có chắc chắn muốn xóa camera "${cam.location} (${cam.name})" không?`);
-    if (confirmDelete) {
-      setCameras(prev => prev.filter(c => c.id !== id));
-      if (zoomedCamId === id) {
-        setZoomedCamId(null);
-      }
+  const toggle = async (camera: Camera, field: 'ppe_enabled' | 'fall_enabled' | 'zone_enabled') => {
+    const pendingKey = `${camera.id}:${field}`;
+    if (pendingTogglesRef.current.has(pendingKey)) return;
+    pendingTogglesRef.current.add(pendingKey);
+    cameraMutationVersion.current += 1;
+    setPendingToggles(new Set(pendingTogglesRef.current));
+    setError('');
+    try {
+      // PATCH only the switch the operator touched. Sending all three values
+      // lets an older render overwrite another switch during rapid clicks.
+      const updated = await camerasApi.models(camera.id, { [field]: !camera[field] });
+      cameraMutationVersion.current += 1;
+      setCameras(items => items.map(item => item.id === updated.id ? updated : item));
+    } catch (reason) { setError(reason instanceof ApiError ? reason.message : 'Không thể cập nhật model.'); }
+    finally {
+      pendingTogglesRef.current.delete(pendingKey);
+      setPendingToggles(new Set(pendingTogglesRef.current));
     }
   };
 
-  const handleModelToggle = (id: string, modelName: string) => {
-    setCameras(prev => prev.map(c => {
-      if (c.id === id) {
-        const hasModel = c.models.includes(modelName);
-        const nextModels = hasModel
-          ? c.models.filter(m => m !== modelName)
-          : [...c.models, modelName];
-        return { ...c, models: nextModels };
-      }
-      return c;
-    }));
+  const create = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    try {
+      const input = editingCamera && !form.source ? {name: form.name, camera_key: form.camera_key, location_desc: form.location_desc} : form;
+      const saved = editingCamera
+        ? await camerasApi.update(editingCamera.id, input)
+        : await camerasApi.create(form);
+      setCameras(items => editingCamera ? items.map(item => item.id === saved.id ? saved : item) : [...items, saved]);
+      setForm(blankCamera);
+      setEditingCamera(null);
+      setShowAdd(false);
+    } catch (reason) { setError(reason instanceof ApiError ? reason.message : 'Không thể thêm camera.'); }
+    finally { setSaving(false); }
   };
 
-  const handleAddCamera = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newCamName || !newCamLoc) {
-      alert('Vui lòng điền đủ thông tin');
-      return;
-    }
-
-    let videoUrl = undefined;
-    if (newCamVideoType === 'preset') {
-      videoUrl = newCamVideoPreset;
-    } else if (newCamVideoType === 'local' && newCamVideoFile) {
-      videoUrl = URL.createObjectURL(newCamVideoFile);
-    }
-
-    const maxId = cameras.reduce((max, c) => {
-      const num = parseInt(c.id, 10);
-      return isNaN(num) ? max : Math.max(max, num);
-    }, 0);
-    const newId = (maxId + 1).toString().padStart(2, '0');
-    const newCam: Camera = {
-      id: newId,
-      name: newCamName,
-      location: newCamLoc,
-      status: 'online',
-      ipAddress: `192.168.1.${100 + maxId + 1}`,
-      models: newCamModels,
-      videoUrl: videoUrl
-    };
-
-    setCameras([...cameras, newCam]);
-    setNewCamName('');
-    setNewCamLoc('');
-    setNewCamModels(['YOLOv8 Security Suite']);
-    setNewCamVideoFile(null);
-    setShowAddModal(false);
+  const remove = async (camera: Camera) => {
+    if (!window.confirm(`Xóa nguồn "${camera.name}"? Lịch sử cảnh báo vẫn được giữ.`)) return;
+    try {
+      await camerasApi.remove(camera.id);
+      setCameras(items => items.filter(item => item.id !== camera.id));
+    } catch (reason) { setError(reason instanceof ApiError ? reason.message : 'Không thể xóa camera.'); }
   };
 
-  return (
-    <div>
-      <div className={styles.topBar}>
-        <button 
-          className="btn btn-outline"
-          onClick={() => setOverlayActive(!overlayActive)}
-        >
-          <span className="material-symbols-outlined">
-            {overlayActive ? 'visibility' : 'visibility_off'}
-          </span>
-          {overlayActive ? 'Tắt AI Overlays' : 'Bật AI Overlays'}
-        </button>
-        
-        <button 
-          className="btn btn-primary"
-          onClick={() => setShowAddModal(true)}
-        >
-          <span className="material-symbols-outlined">add</span>
-          Thêm Camera mới
-        </button>
-      </div>
+  if (loading) return <div className={styles.state}>Đang tải nguồn giám sát...</div>;
 
-      {/* Cameras Grid */}
-      <div className={styles.camerasGrid}>
-        {cameras.map((cam) => (
-          <div 
-            key={cam.id} 
-            className={`${styles.cameraCard} glass-panel`}
-            onClick={() => setZoomedCamId(cam.id)}
-            style={{ cursor: 'pointer' }}
-          >
-            <div className={styles.streamContainer}>
-              <span className={styles.badgeOverlay}>{cam.name}</span>
-              
-              {/* Delete Button */}
-              <button
-                className={styles.deleteBtn}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDeleteCamera(cam.id);
-                }}
-                title="Xóa camera"
-              >
-                <span className="material-symbols-outlined">
-                  delete
-                </span>
-              </button>
-
-              {/* Power Control Button */}
-              <button
-                className={styles.powerBtn}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleCameraPower(cam.id);
-                }}
-                title={cam.status === 'online' ? 'Tắt camera' : 'Bật camera'}
-              >
-                <span className="material-symbols-outlined">
-                  {cam.status === 'online' ? 'power' : 'power_off'}
-                </span>
-              </button>
-
-              {cam.id === '03' && cam.status === 'online' ? (
-                <canvas 
-                  ref={(el) => { canvasRefs.current[cam.id] = el; }} 
-                  width={300} 
-                  height={170} 
-                  className={styles.canvas}
-                />
-              ) : cam.status === 'online' && cam.videoUrl ? (
-                <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-                  <video 
-                    src={cam.videoUrl} 
-                    autoPlay 
-                    muted 
-                    loop 
-                    playsInline 
-                    className={styles.videoStream}
-                  />
-                  {overlayActive && (
-                    <div className={styles.videoOverlay}>
-                      <div className={styles.detectBox} style={{ top: '25%', left: '20%', width: '30%', height: '55%' }}>
-                        <span className={styles.detectLabel}>PERSON 98%</span>
-                      </div>
-                      {cam.id === '04' && (
-                        <div className={styles.detectBox} style={{ top: '15%', left: '55%', width: '35%', height: '45%', borderColor: 'var(--color-warning)' }}>
-                          <span className={styles.detectLabel} style={{ backgroundColor: 'var(--color-warning)' }}>ROBOTIC_ARM 99%</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ) : cam.status === 'online' ? (
-                <div className={styles.streamPlaceholder} style={{ zIndex: 1 }}>
-                  <span className="material-symbols-outlined text-4xl" style={{ color: 'rgba(37,99,235,0.3)' }}>videocam</span>
-                  <span style={{ fontSize: '12px' }}>Live Feed Active (No video)</span>
-                  {overlayActive && (
-                    <div style={{ fontSize: '10px', color: 'var(--color-success)', fontWeight: 'bold' }}>
-                      🟢 [AI Safe State Detected]
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className={styles.streamPlaceholder}>
-                  <span className="material-symbols-outlined text-4xl" style={{ color: 'var(--on-surface-variant)' }}>videocam_off</span>
-                  <span>Camera Offline</span>
-                </div>
-              )}
-            </div>
-
-            <div className={styles.cardFooter}>
-              <div>
-                <div className={styles.camName}>{cam.location}</div>
-                <div className={styles.camLocation}>{cam.ipAddress}</div>
-                <div className={styles.camModelsContainer}>
-                  {cam.models && cam.models.length > 0 ? (
-                    cam.models.map((m) => (
-                      <span key={m} className={styles.modelBadge}>
-                        {m.split(' ')[0]}
-                      </span>
-                    ))
-                  ) : (
-                    <span className={styles.modelBadgeNone}>Không giám sát</span>
-                  )}
-                </div>
-              </div>
-              
-              <div className={styles.statusIndicator}>
-                <span 
-                  className={styles.statusCircle}
-                  style={{ 
-                    backgroundColor: cam.status === 'online' ? 'var(--color-success)' : 'var(--outline)',
-                    boxShadow: cam.status === 'online' ? '0 0 6px var(--color-success)' : 'none'
-                  }}
-                ></span>
-                <span style={{ textTransform: 'capitalize', fontSize: '11px', fontWeight: 600 }}>{cam.status}</span>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Zoom Camera Feed Modal */}
-      {zoomedCamId && zoomedCam && (
-        <div className={styles.zoomModalOverlay} onClick={() => setZoomedCamId(null)}>
-          <div className={`${styles.zoomCard} glass-panel`} onClick={(e) => e.stopPropagation()}>
-            <div className={styles.zoomHeader}>
-              <div className={styles.zoomTitleGroup}>
-                <h3 className={styles.zoomTitle}>{zoomedCam.location}</h3>
-                <span className={styles.zoomSubtitle}>{zoomedCam.name} • {zoomedCam.ipAddress}</span>
-              </div>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <button
-                  className={`${styles.zoomControlBtn} ${zoomedCam.status === 'online' ? styles.btnOnline : styles.btnOffline}`}
-                  onClick={() => toggleCameraPower(zoomedCam.id)}
-                  title={zoomedCam.status === 'online' ? 'Tắt camera' : 'Bật camera'}
-                >
-                  <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>
-                    {zoomedCam.status === 'online' ? 'power' : 'power_off'}
-                  </span>
-                  <span>{zoomedCam.status === 'online' ? 'Hoạt động' : 'Ngoại tuyến'}</span>
-                </button>
-                <button
-                  className={styles.zoomDeleteBtn}
-                  onClick={() => handleDeleteCamera(zoomedCam.id)}
-                  title="Xóa camera"
-                >
-                  <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>
-                    delete
-                  </span>
-                  <span>Xóa</span>
-                </button>
-                <button className={styles.zoomCloseBtn} onClick={() => setZoomedCamId(null)}>
-                  <span className="material-symbols-outlined">close</span>
-                </button>
-              </div>
-            </div>
-
-            <div className={styles.zoomBodyGrid}>
-              {/* Left Column: Big Stream */}
-              <div className={styles.zoomStreamContainer}>
-                {zoomedCam.id === '03' && zoomedCam.status === 'online' ? (
-                  <div className={styles.zoomVideoWrapper}>
-                    <canvas 
-                      ref={(el) => { canvasRefs.current[`zoom-${zoomedCam.id}`] = el; }} 
-                      width={600} 
-                      height={340} 
-                      className={styles.canvas}
-                    />
-                  </div>
-                ) : zoomedCam.status === 'online' && zoomedCam.videoUrl ? (
-                  <div className={styles.zoomVideoWrapper}>
-                    <video 
-                      src={zoomedCam.videoUrl} 
-                      autoPlay 
-                      muted 
-                      loop 
-                      playsInline 
-                      className={styles.zoomVideo}
-                    />
-                    {overlayActive && (
-                      <div className={styles.videoOverlay}>
-                        <div className={styles.detectBox} style={{ top: '25%', left: '20%', width: '30%', height: '55%' }}>
-                          <span className={styles.detectLabel}>PERSON 98%</span>
-                        </div>
-                        {zoomedCam.id === '04' && (
-                          <div className={styles.detectBox} style={{ top: '15%', left: '55%', width: '35%', height: '45%', borderColor: 'var(--color-warning)' }}>
-                            <span className={styles.detectLabel} style={{ backgroundColor: 'var(--color-warning)' }}>ROBOTIC_ARM 99%</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ) : zoomedCam.status === 'online' ? (
-                  <div className={styles.zoomPlaceholder}>
-                    <span className="material-symbols-outlined text-6xl" style={{ color: 'rgba(37,99,235,0.3)', marginBottom: '12px' }}>videocam</span>
-                    <span style={{ fontSize: '14px' }}>Live Stream Active (No video feed configured)</span>
-                  </div>
-                ) : (
-                  <div className={styles.zoomPlaceholder}>
-                    <span className="material-symbols-outlined text-6xl" style={{ color: 'var(--outline)', marginBottom: '12px' }}>videocam_off</span>
-                    <span style={{ fontSize: '14px' }}>Camera is Offline</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Right Column: Telemetry & Logs */}
-              <div className={styles.zoomTelemetryPanel}>
-                <h4 className={styles.panelSectionTitle}>AI Diagnostics & Telemetry</h4>
-                
-                {zoomedCam.status === 'online' ? (
-                  <>
-                    <div className={styles.telemetryStatsGrid}>
-                      <div className={styles.statCard}>
-                        <span className={styles.statLabel}>FPS</span>
-                        <span className={styles.statValue}>{telemetryStats.fps}</span>
-                      </div>
-                      <div className={styles.statCard}>
-                        <span className={styles.statLabel}>Độ trễ</span>
-                        <span className={styles.statValue}>{telemetryStats.latency} ms</span>
-                      </div>
-                      <div className={styles.statCard}>
-                        <span className={styles.statLabel}>CPU AI</span>
-                        <span className={styles.statValue}>{telemetryStats.cpu}%</span>
-                      </div>
-                    </div>
-
-                    <div className={styles.logsContainer}>
-                      <span className={styles.logsLabel}>Nhật ký Phân tích AI</span>
-                      <div className={styles.logsList}>
-                        {telemetryLogs.map((log, index) => (
-                          <div key={index} className={styles.logRow}>{log}</div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className={styles.modelMeta}>
-                      <span className={styles.metaLabel} style={{ fontWeight: 600, marginBottom: '6px', display: 'block' }}>Cấu hình AI Models:</span>
-                      <div className={styles.modelsChecklist}>
-                        {[
-                          'YOLOv8 Security Suite',
-                          'YOLOv5 Fire Detector',
-                          'PPE Classifier ResNet'
-                        ].map((mName) => {
-                          const isChecked = zoomedCam.models.includes(mName);
-                          return (
-                            <label key={mName} className={styles.modelCheckboxLabel}>
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={() => handleModelToggle(zoomedCam.id, mName)}
-                                className={styles.modelCheckbox}
-                              />
-                              <span className={styles.modelCheckboxText}>{mName}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                      <div className={styles.metaRow} style={{ marginTop: '12px' }}>
-                        <span className={styles.metaLabel}>Trạng thái AI:</span>
-                        <span className={styles.metaValue} style={{ color: zoomedCam.models.length === 0 ? 'var(--outline)' : 'var(--color-success)', fontWeight: 'bold' }}>
-                          {zoomedCam.models.length === 0 ? 'Tắt giám sát' : `Đang chạy ${zoomedCam.models.length} model`}
-                        </span>
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <div className={styles.telemetryOfflineMessage}>
-                    <span className="material-symbols-outlined text-4xl" style={{ color: 'var(--outline)', marginBottom: '8px' }}>sensors_off</span>
-                    <span>Hệ thống AI Ngoại tuyến</span>
-                    <p>Hãy bật camera để kết nối lại luồng phân tích.</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Add Camera Dialog Modal */}
-      {showAddModal && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 100, backdropFilter: 'blur(4px)'
-        }}>
-          <div className="glass-panel" style={{ padding: '24px', width: '420px', backgroundColor: 'var(--surface-lowest)' }}>
-            <h3 style={{ marginBottom: '16px', fontSize: '18px', fontWeight: 600 }}>Cấu hình Camera mới</h3>
-            
-            <form onSubmit={handleAddCamera} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div className="input-group">
-                <label className="input-label" htmlFor="camName">Mã Camera</label>
-                <div className="input-wrapper">
-                  <input 
-                    type="text" 
-                    id="camName" 
-                    className="input-field" 
-                    placeholder="Ví dụ: CAM-07" 
-                    value={newCamName}
-                    onChange={(e) => setNewCamName(e.target.value)}
-                    required
-                    style={{ paddingLeft: '12px' }}
-                  />
-                </div>
-              </div>
-
-              <div className="input-group">
-                <label className="input-label" htmlFor="camLoc">Vị trí Lắp đặt</label>
-                <div className="input-wrapper">
-                  <input 
-                    type="text" 
-                    id="camLoc" 
-                    className="input-field" 
-                    placeholder="Ví dụ: Nhà để xe máy" 
-                    value={newCamLoc}
-                    onChange={(e) => setNewCamLoc(e.target.value)}
-                    required
-                    style={{ paddingLeft: '12px' }}
-                  />
-                </div>
-              </div>
-
-              <div className="input-group">
-                <label className="input-label">Cấu hình Models AI</label>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
-                  {[
-                    'YOLOv8 Security Suite',
-                    'YOLOv5 Fire Detector',
-                    'PPE Classifier ResNet'
-                  ].map((mName) => {
-                    const isChecked = newCamModels.includes(mName);
-                    return (
-                      <label key={mName} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer', userSelect: 'none' }}>
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => {
-                            setNewCamModels(prev =>
-                              prev.includes(mName) ? prev.filter(x => x !== mName) : [...prev, mName]
-                            );
-                          }}
-                          style={{ cursor: 'pointer', accentColor: 'var(--primary)', width: '14px', height: '14px' }}
-                        />
-                        {mName}
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="input-group">
-                <label className="input-label">Nguồn Video Demo</label>
-                <div style={{ display: 'flex', gap: '12px', marginTop: '4px', marginBottom: '8px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', cursor: 'pointer' }}>
-                    <input 
-                      type="radio" 
-                      name="videoType" 
-                      checked={newCamVideoType === 'preset'}
-                      onChange={() => setNewCamVideoType('preset')}
-                    />
-                    Mẫu có sẵn
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', cursor: 'pointer' }}>
-                    <input 
-                      type="radio" 
-                      name="videoType" 
-                      checked={newCamVideoType === 'local'}
-                      onChange={() => setNewCamVideoType('local')}
-                    />
-                    Chọn từ máy tính
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', cursor: 'pointer' }}>
-                    <input 
-                      type="radio" 
-                      name="videoType" 
-                      checked={newCamVideoType === 'none'}
-                      onChange={() => setNewCamVideoType('none')}
-                    />
-                    Không dùng
-                  </label>
-                </div>
-
-                {newCamVideoType === 'preset' && (
-                  <select
-                    className="input-field"
-                    value={newCamVideoPreset}
-                    onChange={(e) => setNewCamVideoPreset(e.target.value)}
-                    style={{ height: '38px', padding: '0 8px', fontSize: '13px', borderRadius: 'var(--radius-md)' }}
-                  >
-                    <option value="https://assets.mixkit.co/videos/preview/mixkit-security-camera-footage-of-a-corridor-42404-large.mp4">Hành lang an ninh (Hành lang)</option>
-                    <option value="https://assets.mixkit.co/videos/preview/mixkit-people-walking-in-a-modern-office-43026-large.mp4">Sảnh Văn Phòng (Văn phòng)</option>
-                    <option value="https://assets.mixkit.co/videos/preview/mixkit-industrial-robotic-arms-welding-components-48906-large.mp4">Dây chuyền Công nghiệp (Robot Hàn)</option>
-                    <option value="https://assets.mixkit.co/videos/preview/mixkit-security-guard-monitoring-in-control-room-42401-large.mp4">Phòng giám sát (Control Room)</option>
-                  </select>
-                )}
-
-                {newCamVideoType === 'local' && (
-                  <div className={styles.fileUploadContainer}>
-                    <input 
-                      type="file" 
-                      ref={fileInputRef}
-                      accept="video/*" 
-                      style={{ display: 'none' }}
-                      onChange={(e) => {
-                        if (e.target.files && e.target.files[0]) {
-                          setNewCamVideoFile(e.target.files[0]);
-                        }
-                      }}
-                    />
-                    <button 
-                      type="button" 
-                      className={styles.fileUploadBtn}
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      <span className="material-symbols-outlined">video_file</span>
-                      <span>Chọn file video...</span>
-                    </button>
-                    {newCamVideoFile && (
-                      <div className={styles.fileNameDisplay}>
-                        <span className="material-symbols-outlined text-sm">check_circle</span>
-                        <span className={styles.fileName} title={newCamVideoFile.name}>
-                          {newCamVideoFile.name}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
-                <button type="button" className="btn btn-outline" style={{ height: '36px' }} onClick={() => setShowAddModal(false)}>
-                  Hủy
-                </button>
-                <button type="submit" className="btn btn-primary" style={{ height: '36px' }}>
-                  Lưu lại
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+  return <div className={styles.page}>
+    <div className={styles.toolbar}>
+      <div><h2>Nguồn giám sát</h2><p>{cameras.length} camera hoặc video đã cấu hình</p></div>
+      <div className={styles.toolbarActions}><button className="btn btn-outline" onClick={() => setOverlay(value => !value)}>{overlay ? 'Tắt overlay' : 'Bật overlay'}</button><button className="btn btn-primary" onClick={() => setShowAdd(true)}>Thêm nguồn</button></div>
     </div>
-  );
+    {error && <div className={styles.error} role="alert">{error} <button onClick={() => void load()}>Thử lại</button></div>}
+    {cameras.length === 0 ? <div className={styles.state}>Chưa có nguồn. Thêm camera USB, RTSP, HTTP hoặc video file để bắt đầu.</div> :
+      <div className={styles.grid}>{cameras.map(camera => <article className={styles.card} key={camera.id}>
+        <div className={styles.preview} onClick={() => setZoomCamera(camera)} role="button" tabIndex={0} aria-label={`Phóng to ${camera.name}`}>
+          <CameraLiveFrame camera={camera} overlay={overlay} />
+          <span className={`${styles.status} ${camera.status === 'ONLINE' ? styles.online : ''}`}>{camera.status}</span>
+        </div>
+        <div className={styles.body}>
+          <div className={styles.title}><div><h3>{camera.name}</h3><p>{camera.location_desc || camera.camera_key}</p></div><div className={styles.iconActions}><button aria-label={`Sửa ${camera.name}`} onClick={() => {setEditingCamera(camera);setForm({name:camera.name,camera_key:camera.camera_key,source:'',location_desc:camera.location_desc || ''});setShowAdd(true);}}><span className="material-symbols-outlined">edit</span></button><button aria-label={`Xóa ${camera.name}`} onClick={() => void remove(camera)}><span className="material-symbols-outlined">delete</span></button></div></div>
+          <dl className={styles.metrics}><div><dt>FPS</dt><dd>{camera.processing_fps?.toFixed(1) ?? '-'}</dd></div><div><dt>Latency</dt><dd>{camera.latency_ms ? `${camera.latency_ms.toFixed(0)} ms` : '-'}</dd></div><div><dt>Config</dt><dd>{camera.config_status}</dd></div></dl>
+          <div className={styles.toggles}>
+            {(['ppe_enabled', 'fall_enabled', 'zone_enabled'] as const).map(field => { const pendingKey = `${camera.id}:${field}`; return <label key={field}><input type="checkbox" checked={camera[field]} disabled={pendingToggles.has(pendingKey)} onChange={() => void toggle(camera, field)} /><span>{field.split('_')[0].toUpperCase()}{pendingToggles.has(pendingKey) ? '…' : ''}</span></label>; })}
+          </div>
+          <button className="btn btn-outline" onClick={() => setZoneCamera(camera)}>Vẽ và quản lý zone</button>
+          {camera.config_error && <p className={styles.configError}>{camera.config_error}</p>}
+        </div>
+      </article>)}</div>}
+    {showAdd && <div className={styles.modal} role="dialog" aria-modal="true"><form className={styles.form} onSubmit={create}>
+      <div className={styles.formHeader}><h3>{editingCamera ? 'Sửa nguồn giám sát' : 'Thêm nguồn giám sát'}</h3><button type="button" onClick={() => {setShowAdd(false);setEditingCamera(null);setForm(blankCamera);}} aria-label="Đóng"><span className="material-symbols-outlined">close</span></button></div>
+      <label>Tên<input required value={form.name} onChange={e => setForm({...form, name:e.target.value})} /></label>
+      <label>Mã camera<input required value={form.camera_key} onChange={e => setForm({...form, camera_key:e.target.value})} /></label>
+      <label>Nguồn<input required={!editingCamera} value={form.source} onChange={e => setForm({...form, source:e.target.value})} placeholder={editingCamera ? 'Để trống để giữ nguồn hiện tại' : '0, rtsp://..., http://... hoặc file.mp4'} /></label>
+      <label>Vị trí<input value={form.location_desc} onChange={e => setForm({...form, location_desc:e.target.value})} /></label>
+      <div className={styles.actions}><button type="button" className="btn btn-outline" onClick={() => {setShowAdd(false);setEditingCamera(null);setForm(blankCamera);}}>Hủy</button><button disabled={saving} className="btn btn-primary">{saving ? 'Đang lưu...' : 'Lưu nguồn'}</button></div>
+    </form></div>}
+    {zoneCamera && <ZoneEditor camera={zoneCamera} onClose={() => setZoneCamera(null)} />}
+    {zoomCamera && <div className={styles.modal} role="dialog" aria-modal="true"><div className={styles.liveDialog}><div className={styles.formHeader}><div><h3>{zoomCamera.name}</h3><p>{zoomCamera.location_desc || zoomCamera.camera_key}</p></div><button onClick={() => setZoomCamera(null)} aria-label="Đóng"><span className="material-symbols-outlined">close</span></button></div><div className={styles.fullFrame}><CameraLiveFrame camera={zoomCamera} overlay={overlay} /></div><dl className={styles.metrics}><div><dt>FPS</dt><dd>{zoomCamera.processing_fps?.toFixed(1) ?? '-'}</dd></div><div><dt>Latency</dt><dd>{zoomCamera.latency_ms?.toFixed(0) ?? '-'} ms</dd></div><div><dt>Frame cuối</dt><dd>{zoomCamera.last_frame_at ? new Date(zoomCamera.last_frame_at).toLocaleTimeString('vi-VN') : '-'}</dd></div></dl></div></div>}
+  </div>;
 }

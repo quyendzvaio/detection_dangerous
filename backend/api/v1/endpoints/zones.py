@@ -10,7 +10,11 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[ZoneOut])
-def list_zones(camera_id: int | None = Query(None), db: Session = Depends(get_db)):
+def list_zones(
+    camera_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
+):
     return zone_service.get_zones(db, camera_id=camera_id)
 
 
@@ -24,7 +28,11 @@ def create_zone(
 
 
 @router.get("/{zone_id}", response_model=ZoneOut)
-def get_zone(zone_id: int, db: Session = Depends(get_db)):
+def get_zone(
+    zone_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
+):
     zone = zone_service.get_zone_by_id(db, zone_id)
     if zone is None:
         from fastapi import HTTPException
@@ -32,7 +40,8 @@ def get_zone(zone_id: int, db: Session = Depends(get_db)):
     return zone
 
 
-@router.put("/{zone_id}", response_model=ZoneOut)
+@router.patch("/{zone_id}", response_model=ZoneOut)
+@router.put("/{zone_id}", response_model=ZoneOut, include_in_schema=False)
 def update_zone(
     zone_id: int,
     zone_in: ZoneUpdate,

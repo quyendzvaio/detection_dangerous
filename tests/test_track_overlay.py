@@ -70,6 +70,32 @@ def test_zone_event_uses_zone_id():
     assert store.snapshot()["cam1-7"].zones == ("42",)
 
 
+def test_disabling_each_branch_clears_only_its_overlay_state():
+    store = OverlayStateStore()
+    store.apply_event(fall_event())
+    store.apply_event(
+        RestrictedZoneEvent(
+            camera_id=1, track_id="cam1-7", detected_at=1.0, zone_id=42
+        )
+    )
+    store.apply_update(
+        update("ppe", no_helmet=1, no_glasses=0, no_gloves=0, no_vest=1)
+    )
+
+    store.clear_branch("fall")
+    state = store.snapshot()["cam1-7"]
+    assert state.fall_detected is False
+    assert state.zones == ("42",)
+    assert state.ppe_violations == ("NO HELMET", "NO VEST")
+
+    store.clear_branch("zone")
+    store.clear_branch("ppe")
+    state = store.snapshot()["cam1-7"]
+    assert state.severity == "NORMAL"
+    assert state.zones == ()
+    assert state.ppe_violations == ()
+
+
 def test_missing_track_prunes_latched_state():
     store = OverlayStateStore(missing_track_ttl_s=3.0)
     store.mark_seen(["cam1-7"], now=10.0)

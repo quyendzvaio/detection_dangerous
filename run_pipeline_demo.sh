@@ -31,7 +31,7 @@ if [[ "$EVIDENCE_MODE" == "1" || "$EVIDENCE_MODE" == "true" || "$EVIDENCE_MODE" 
   EVIDENCE_ARGS+=(--evidence)
 fi
 
-docker compose up -d --build postgres adminer backend triton-server
+docker compose up -d --build postgres adminer backend frontend triton-server
 
 echo "[pipeline] Waiting for backend/PostgreSQL..."
 for ((attempt = 1; attempt <= SERVICE_START_TIMEOUT; attempt++)); do
@@ -70,6 +70,7 @@ else
 fi
 
 echo "[pipeline] Adminer: http://localhost:${ADMINER_PORT:-8081}"
+echo "[pipeline] Product UI: http://localhost:${FRONTEND_PORT:-3000}"
 # Azure connection credentials are backend-only. Do not leak them into camera child processes.
 unset AZURE_STORAGE_CONNECTION_STRING
 

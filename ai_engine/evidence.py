@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import subprocess
 import threading
 import time
 from collections import deque
@@ -474,28 +475,86 @@ class EvidenceCapture:
         first = cv2.imdecode(
             np.frombuffer(pending.samples[0].jpeg, dtype=np.uint8), cv2.IMREAD_COLOR
         )
+        if first is None:
+            raise RuntimeError("could not decode first fall evidence frame")
         height, width = first.shape[:2]
-        writer = cv2.VideoWriter(
-            str(video_path),
-            cv2.VideoWriter_fourcc(*"mp4v"),
-            self.sample_fps,
-            (width, height),
+        temporary_path = video_path.with_name(f"{video_path.stem}.encoding.mp4")
+        temporary_path.unlink(missing_ok=True)
+
+        try:
+            import imageio_ffmpeg
+        except ImportError as exc:
+            raise RuntimeError(
+                "imageio-ffmpeg is required to create browser-compatible evidence"
+            ) from exc
+
+        command = [
+            imageio_ffmpeg.get_ffmpeg_exe(),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgr24",
+            "-video_size",
+            f"{width}x{height}",
+            "-framerate",
+            str(self.sample_fps),
+            "-i",
+            "pipe:0",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-vf",
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(temporary_path),
+        ]
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
-        if not writer.isOpened():
-            raise RuntimeError("OpenCV MP4 writer is unavailable")
         try:
             for sample in pending.samples:
                 frame = cv2.imdecode(
                     np.frombuffer(sample.jpeg, dtype=np.uint8), cv2.IMREAD_COLOR
                 )
+                if frame is None:
+                    raise RuntimeError("could not decode fall evidence frame")
                 if frame.shape[1] != width or frame.shape[0] != height:
                     frame = cv2.resize(frame, (width, height))
                 self._draw_event(
                     frame, sample.bboxes.get(pending.event.track_id), pending.event
                 )
-                writer.write(frame)
-        finally:
-            writer.release()
+                if process.stdin is None:
+                    raise RuntimeError("FFmpeg input pipe is unavailable")
+                process.stdin.write(np.ascontiguousarray(frame).tobytes())
+            if process.stdin is not None:
+                process.stdin.close()
+            stderr = process.stderr.read() if process.stderr is not None else b""
+            return_code = process.wait()
+            if return_code != 0:
+                detail = stderr.decode("utf-8", errors="replace").strip()
+                raise RuntimeError(f"FFmpeg H.264 encoding failed: {detail[-1000:]}")
+            if not temporary_path.is_file() or temporary_path.stat().st_size == 0:
+                raise RuntimeError("FFmpeg produced an empty fall evidence video")
+            temporary_path.replace(video_path)
+        except Exception:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            temporary_path.unlink(missing_ok=True)
+            video_path.unlink(missing_ok=True)
+            raise
         self.submit_job(
             EvidenceJob(
                 pending.event.event_id,

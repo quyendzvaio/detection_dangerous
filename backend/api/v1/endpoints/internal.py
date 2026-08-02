@@ -1,12 +1,19 @@
 import hmac
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
 from backend.core.deps import get_db
-from backend.models.schemas.camera import CameraOut, CameraRuntimeRegistration
+from backend.models.schemas.camera import (
+    CameraOut,
+    CameraRuntimeConfig,
+    CameraRuntimeConfigAck,
+    CameraRuntimeRegistration,
+    CameraTelemetryIn,
+    CameraTelemetryOut,
+)
 from backend.models.schemas.evidence import (
     EvidenceCompleteRequest,
     EvidenceFailRequest,
@@ -23,7 +30,8 @@ from backend.services.camera_service import camera_service
 from backend.services.evidence_service import evidence_service
 from backend.services.system_event_service import system_event_service
 from backend.services.violation_service import violation_service
-from backend.ws import alerts_manager
+from backend.ws import alerts_manager, camera_frames_manager
+from backend.frame_store import latest_frames
 
 router = APIRouter()
 
@@ -47,6 +55,71 @@ def register_runtime_camera(
     camera, created = camera_service.register_runtime_camera(db, camera_id, payload)
     response.status_code = 201 if created else 200
     return camera
+
+
+@router.get(
+    "/cameras/{camera_id}/runtime-config", response_model=CameraRuntimeConfig
+)
+def get_runtime_config(
+    camera_id: int,
+    db: Session = Depends(get_db),
+    _authorized: None = Depends(require_ai_service),
+):
+    return camera_service.get_runtime_config(db, camera_id)
+
+
+@router.post(
+    "/cameras/{camera_id}/runtime-config/ack", response_model=CameraOut
+)
+def acknowledge_runtime_config(
+    camera_id: int,
+    payload: CameraRuntimeConfigAck,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _authorized: None = Depends(require_ai_service),
+):
+    camera = camera_service.acknowledge_runtime_config(db, camera_id, payload)
+    background_tasks.add_task(
+        alerts_manager.broadcast,
+        {
+            "event_category": "CONFIG_STATUS",
+            "camera_id": camera.id,
+            "revision": camera.applied_revision,
+            "status": camera.config_status,
+            "error": camera.config_error,
+        },
+    )
+    return camera
+
+
+@router.post("/cameras/{camera_id}/telemetry", response_model=CameraTelemetryOut)
+def update_camera_telemetry(
+    camera_id: int,
+    payload: CameraTelemetryIn,
+    db: Session = Depends(get_db),
+    _authorized: None = Depends(require_ai_service),
+):
+    return camera_service.update_telemetry(db, camera_id, payload)
+
+
+@router.post("/cameras/{camera_id}/frame", status_code=204)
+async def update_camera_frame(
+    camera_id: int,
+    request: Request,
+    overlay: bool = True,
+    db: Session = Depends(get_db),
+    _authorized: None = Depends(require_ai_service),
+):
+    if camera_service.get_camera_by_id(db, camera_id) is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    if request.headers.get("content-type", "").split(";", 1)[0] != "image/jpeg":
+        raise HTTPException(status_code=415, detail="Frame must be image/jpeg")
+    jpeg = await request.body()
+    if not jpeg or len(jpeg) > 5_000_000:
+        raise HTTPException(status_code=413, detail="Frame must be between 1 byte and 5 MB")
+    latest_frames.put(camera_id, overlay, jpeg)
+    await camera_frames_manager.broadcast(camera_id, overlay, jpeg)
+    return Response(status_code=204)
 
 
 @router.post("/events", response_model=EventIngestResponse)
