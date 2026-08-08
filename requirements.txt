@@ -10,6 +10,7 @@ sqlalchemy>=2.0.0           # ORM Database Toolkit (backend)
 fastapi>=0.115              # Layer 4 HTTP API
 uvicorn[standard]>=0.30     # ASGI server for FastAPI
 pydantic>=2.8               # Typed request/response validation
+bcrypt>=4.2,<5              # Password hashing used by the customer-host auth flow
 alembic>=1.13               # Versioned PostgreSQL migrations
 requests>=2.31              # EventBus HTTP transport
 azure-storage-blob>=12.30,<13   # Backend Azure Blob SAS URLs and verification
