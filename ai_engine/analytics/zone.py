@@ -62,6 +62,21 @@ class ZoneChecker:
 
         return confirmed
 
+    def active_zone_ids(self, track_id):
+        """Return zones whose intrusion debounce is currently satisfied.
+
+        ``check`` intentionally returns a zone only once, at the moment the
+        debounce threshold is crossed, so the event pipeline does not create a
+        violation on every frame. The preview overlay has a different need: it
+        must know the current state on every frame in order to remove the
+        danger styling immediately when a person leaves the polygon.
+        """
+        return tuple(
+            zone_id
+            for (candidate_track_id, zone_id), count in self._inside_counts.items()
+            if candidate_track_id == track_id and count >= self.debounce_frames
+        )
+
     def drop_track(self, track_id):
         """Clean up state when a track disappears."""
         for key in [k for k in self._inside_counts if k[0] == track_id]:

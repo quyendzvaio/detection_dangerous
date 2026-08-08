@@ -92,6 +92,12 @@ class OverlayStateStore:
                     ppe_violations=violations,
                     updated_at=update.captured_at,
                 )
+            elif update.branch == "zone":
+                current = replace(
+                    current,
+                    zones=tuple(str(zone_id) for zone_id in update.details.get("zones", ())),
+                    updated_at=update.captured_at,
+                )
             elif update.branch == "fall":
                 probability = update.details.get("probability")
                 phase = update.details.get("phase")
