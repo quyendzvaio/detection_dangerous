@@ -49,13 +49,25 @@ class FallConfig:
     """Inference contract exported by the training notebook."""
 
     def __init__(self, max_frames, num_features, min_keypoint_confidence,
-                 threshold, window_seconds=1.0, min_real_points=8):
+                 threshold, window_seconds=1.0, min_real_points=8,
+                 still_down_confirmation_seconds=5.0,
+                 recovery_confirmation_seconds=2.0,
+                 still_down_vote_ratio=0.6,
+                 still_down_min_valid_frames=3):
         self.max_frames = int(max_frames)
         self.num_features = int(num_features)
         self.min_kp_conf = float(min_keypoint_confidence)
         self.threshold = float(threshold)
         self.window_seconds = float(window_seconds)
         self.min_real_points = int(min_real_points)
+        self.still_down_confirmation_seconds = float(
+            still_down_confirmation_seconds
+        )
+        self.recovery_confirmation_seconds = float(
+            recovery_confirmation_seconds
+        )
+        self.still_down_vote_ratio = float(still_down_vote_ratio)
+        self.still_down_min_valid_frames = int(still_down_min_valid_frames)
 
     @classmethod
     def from_json(cls, path):
@@ -68,6 +80,16 @@ class FallConfig:
             threshold=raw['threshold'],
             window_seconds=notes.get('window_seconds_realtime', 1.0),
             min_real_points=notes.get('min_real_points_per_window', 8),
+            still_down_confirmation_seconds=notes.get(
+                'still_down_confirmation_seconds', 5.0
+            ),
+            recovery_confirmation_seconds=notes.get(
+                'recovery_confirmation_seconds', 2.0
+            ),
+            still_down_vote_ratio=notes.get('still_down_vote_ratio', 0.6),
+            still_down_min_valid_frames=notes.get(
+                'still_down_min_valid_frames', 3
+            ),
         )
         if raw['keypoint_order'] != COCO_KEYPOINTS:
             raise ValueError('keypoint_order in config differs from COCO_KEYPOINTS')
@@ -316,51 +338,124 @@ class FallDecision:
 
 @dataclass(frozen=True)
 class FallAnalysis:
-    """One analyzer result; probability=None means the window is not ready."""
+    """One analyzer result plus the current per-track incident phase."""
 
     camera_id: int
     camera_key: str
     track_id: str
     captured_at: float
     probability: float | None
-    alert_fired: bool
     sample_count: int
+    phase: str = "NORMAL"
+    warning_fired: bool = False
+    critical_fired: bool = False
+    recovered: bool = False
+    event_confidence: float | None = None
+
+
+@dataclass
+class _FallIncident:
+    started_at: float
+    trigger_confidence: float
+    upright_since: float | None = None
+    critical: bool = False
 
 
 class FallProcessor:
     """Layer 2 temporal Fall branch consuming lightweight FallTask values."""
 
-    def __init__(self, config, detector, decision=None, inference_interval_s=0.25):
+    def __init__(self, config, detector, decision=None, inference_interval_s=0.25,
+                 posture_detector=None):
         self.config = config
         self.detector = detector
         self.preprocessor = FallPreprocessor(config)
         self.buffer = TrackKeypointBuffer(window_seconds=config.window_seconds)
         self.decision = decision or FallDecision(config.threshold)
+        self.posture_detector = posture_detector or HeuristicFallDetector(
+            min_conf=config.min_kp_conf
+        )
         self.inference_interval_s = float(inference_interval_s)
         self._last_inference = {}
+        self._incidents = {}
+
+    def _advance_incident(self, track_id, frames, now):
+        incident = self._incidents.get(track_id)
+        if incident is None:
+            return "NORMAL", False, False
+
+        still_down = self.posture_detector.classify(
+            frames,
+            min_valid_frames=self.config.still_down_min_valid_frames,
+            vote_ratio=self.config.still_down_vote_ratio,
+        )
+        if still_down is True:
+            incident.upright_since = None
+        elif still_down is False:
+            if incident.upright_since is None:
+                incident.upright_since = now
+            elif (
+                now - incident.upright_since
+                >= self.config.recovery_confirmation_seconds
+            ):
+                del self._incidents[track_id]
+                return "NORMAL", False, True
+
+        critical_fired = False
+        if (
+            not incident.critical
+            and still_down is True
+            and now - incident.started_at
+            >= self.config.still_down_confirmation_seconds
+        ):
+            incident.critical = True
+            critical_fired = True
+        phase = "CRITICAL" if incident.critical else "WARNING"
+        return phase, critical_fired, False
 
     def process(self, task):
         self.buffer.push(task.track_id, task.keypoints, task.captured_at)
         self.buffer.prune(task.captured_at)
         timed_frames = self.buffer.timed_window(task.track_id, task.captured_at)
+        raw_frames = [frame for _, frame in timed_frames]
+        phase, critical_fired, recovered = self._advance_incident(
+            task.track_id, raw_frames, task.captured_at
+        )
+        incident = self._incidents.get(task.track_id)
+        event_confidence = (
+            incident.trigger_confidence if incident is not None else None
+        )
         last = self._last_inference.get(task.track_id)
         if last is not None and task.captured_at - last < self.inference_interval_s:
             return FallAnalysis(task.camera_id, task.camera_key, task.track_id,
-                                task.captured_at, None, False, len(timed_frames))
+                                task.captured_at, None, len(timed_frames), phase,
+                                critical_fired=critical_fired, recovered=recovered,
+                                event_confidence=event_confidence)
         features = self.preprocessor.transform_timed(timed_frames)
         if features is None:
             return FallAnalysis(task.camera_id, task.camera_key, task.track_id,
-                                task.captured_at, None, False, len(timed_frames))
+                                task.captured_at, None, len(timed_frames), phase,
+                                critical_fired=critical_fired, recovered=recovered,
+                                event_confidence=event_confidence)
         probability = self.detector.predict(features)
         self._last_inference[task.track_id] = task.captured_at
         fired = self.decision.update(task.track_id, probability, task.captured_at)
+        warning_fired = False
+        if fired and task.track_id not in self._incidents:
+            incident = _FallIncident(task.captured_at, float(probability))
+            self._incidents[task.track_id] = incident
+            phase = "WARNING"
+            warning_fired = True
+            event_confidence = incident.trigger_confidence
         return FallAnalysis(task.camera_id, task.camera_key, task.track_id,
-                            task.captured_at, probability, fired, len(timed_frames))
+                            task.captured_at, probability, len(timed_frames), phase,
+                            warning_fired, critical_fired, recovered,
+                            event_confidence)
 
     def drop_track(self, track_id):
         self.buffer.drop_track(track_id)
         self.decision.drop_track(track_id)
         self._last_inference.pop(track_id, None)
+        self._incidents.pop(track_id, None)
 
 
 class HeuristicFallDetector:
@@ -376,22 +471,36 @@ class HeuristicFallDetector:
         self.angle_threshold_deg = angle_threshold_deg
         self.min_conf = min_conf
 
+    def _frame_vote(self, keypoints):
+        kps = np.asarray(keypoints, dtype=np.float32)
+        parts = kps[[self.L_SHOULDER, self.R_SHOULDER, self.L_HIP, self.R_HIP]]
+        if (parts[:, 2] < self.min_conf).any() or not np.isfinite(parts).all():
+            return None
+        shoulder_mid = (parts[0, :2] + parts[1, :2]) / 2
+        hip_mid = (parts[2, :2] + parts[3, :2]) / 2
+        spine = shoulder_mid - hip_mid
+        norm = np.linalg.norm(spine)
+        if norm == 0:
+            return None
+        cos_angle = np.clip(
+            np.dot(spine / norm, np.array([0.0, -1.0])), -1.0, 1.0
+        )
+        return math.degrees(math.acos(cos_angle)) > self.angle_threshold_deg
+
+    def _votes(self, frames):
+        return [vote for vote in (self._frame_vote(kps) for kps in frames[-5:])
+                if vote is not None]
+
     def predict(self, frames):
-        """frames: list of (17, 3) raw keypoints. Returns vote ratio in [0, 1]."""
-        votes = []
-        for kps in frames[-5:]:
-            kps = np.asarray(kps, dtype=np.float32)
-            parts = kps[[self.L_SHOULDER, self.R_SHOULDER, self.L_HIP, self.R_HIP]]
-            if (parts[:, 2] < self.min_conf).any():
-                continue
-            shoulder_mid = (parts[0, :2] + parts[1, :2]) / 2
-            hip_mid = (parts[2, :2] + parts[3, :2]) / 2
-            spine = shoulder_mid - hip_mid
-            norm = np.linalg.norm(spine)
-            if norm == 0:
-                continue
-            cos_angle = np.clip(np.dot(spine / norm, np.array([0.0, -1.0])), -1.0, 1.0)
-            votes.append(math.degrees(math.acos(cos_angle)) > self.angle_threshold_deg)
+        """Return the horizontal-torso vote ratio in [0, 1]."""
+        votes = self._votes(frames)
         if not votes:
             return 0.0
         return float(sum(votes)) / len(votes)
+
+    def classify(self, frames, min_valid_frames=3, vote_ratio=0.6):
+        """Return True=down, False=upright, None=not enough reliable poses."""
+        votes = self._votes(frames)
+        if len(votes) < min_valid_frames:
+            return None
+        return float(sum(votes)) / len(votes) >= vote_ratio

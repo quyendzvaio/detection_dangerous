@@ -10,6 +10,7 @@ import numpy as np
 
 from ai_engine.contracts.event_schema import (
     FallDetectedEvent,
+    FallSuspectedEvent,
     PPEViolationEvent,
     RestrictedZoneEvent,
     SafetyEvent,
@@ -35,6 +36,7 @@ DARK = (25, 25, 25)
 class TrackOverlayState:
     track_id: str
     ppe_violations: tuple[str, ...] = ()
+    fall_warning: bool = False
     fall_detected: bool = False
     fall_probability: float | None = None
     zones: tuple[str, ...] = ()
@@ -47,6 +49,8 @@ class TrackOverlayState:
             return "CRITICAL"
         if self.zones or self.ppe_violations:
             return "DANGER"
+        if self.fall_warning:
+            return "WARNING"
         return "NORMAL"
 
 
@@ -90,14 +94,21 @@ class OverlayStateStore:
                 )
             elif update.branch == "fall":
                 probability = update.details.get("probability")
-                detected = current.fall_detected or bool(
-                    update.details.get("detected", False)
-                )
+                phase = update.details.get("phase")
+                if phase in {"NORMAL", "WARNING", "CRITICAL"}:
+                    warning = phase == "WARNING"
+                    detected = phase == "CRITICAL"
+                else:
+                    warning = current.fall_warning
+                    detected = current.fall_detected or bool(
+                        update.details.get("detected", False)
+                    )
                 current = replace(
                     current,
                     fall_probability=(
                         float(probability) if probability is not None else None
                     ),
+                    fall_warning=warning,
                     fall_detected=detected,
                     updated_at=update.captured_at,
                 )
@@ -109,7 +120,16 @@ class OverlayStateStore:
             if isinstance(event, FallDetectedEvent):
                 current = replace(
                     current,
+                    fall_warning=False,
                     fall_detected=True,
+                    fall_probability=event.confidence,
+                    updated_at=event.detected_at,
+                )
+            elif isinstance(event, FallSuspectedEvent):
+                current = replace(
+                    current,
+                    fall_warning=True,
+                    fall_detected=False,
                     fall_probability=event.confidence,
                     updated_at=event.detected_at,
                 )
@@ -135,7 +155,8 @@ class OverlayStateStore:
             current = self._states.get(track_id)
             if current is not None:
                 self._states[track_id] = replace(
-                    current, fall_detected=False, fall_probability=None
+                    current, fall_warning=False, fall_detected=False,
+                    fall_probability=None
                 )
 
     def clear_branch(self, branch: str) -> None:
@@ -146,7 +167,8 @@ class OverlayStateStore:
             for track_id, current in tuple(self._states.items()):
                 if branch == "fall":
                     current = replace(
-                        current, fall_detected=False, fall_probability=None
+                        current, fall_warning=False, fall_detected=False,
+                        fall_probability=None
                     )
                 elif branch == "ppe":
                     current = replace(current, ppe_violations=())
@@ -172,7 +194,7 @@ def _style(state: TrackOverlayState | None):
         return ORANGE, "DANGER ZONE"
     if state.ppe_violations:
         return ORANGE, f"DANGER PPE {len(state.ppe_violations)}"
-    if state.fall_probability is not None:
+    if state.fall_warning:
         return YELLOW, "WARNING FALL"
     return GREEN, "NORMAL"
 

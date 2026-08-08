@@ -115,3 +115,12 @@ class AzureBlobStorage:
             "etag": str(properties.etag).strip('"') or None,
             "content_type": properties.content_settings.content_type,
         }
+
+    def delete(self, key: str) -> None:
+        """Delete an evidence blob; missing objects are already cleaned up."""
+        from azure.core.exceptions import ResourceNotFoundError
+
+        try:
+            self.container_client.delete_blob(key, delete_snapshots="include")
+        except ResourceNotFoundError:
+            pass

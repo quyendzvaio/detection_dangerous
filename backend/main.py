@@ -1,17 +1,58 @@
 """FastAPI Layer 4 API and event gateway."""
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from backend.api.v1.api import api_router
 from backend.core.config import settings
-from backend.db.session import engine
+from backend.db.session import SessionLocal, engine
+from backend.services.retention_service import retention_service
 from backend.ws import alerts_endpoint, camera_frames_endpoint
+
+log = logging.getLogger(__name__)
+
+
+async def _retention_loop() -> None:
+    while True:
+        db = SessionLocal()
+        try:
+            result = retention_service.cleanup(
+                db,
+                retention_days=settings.VIOLATION_RETENTION_DAYS,
+                max_violations=settings.VIOLATION_MAX_COUNT,
+                keep_violations=settings.VIOLATION_KEEP_COUNT,
+            )
+            if result["age_deleted"] or result["capacity_deleted"]:
+                log.info("Violation retention cleanup: %s", result)
+        except Exception:
+            log.exception("Violation retention cleanup failed")
+        finally:
+            db.close()
+        await asyncio.sleep(settings.VIOLATION_RETENTION_INTERVAL_SECONDS)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    task = asyncio.create_task(_retention_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    lifespan=lifespan,
 )
 app.add_middleware(
     CORSMiddleware,

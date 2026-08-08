@@ -166,16 +166,16 @@ Tỷ lệ tuân thủ chỉ đúng khi định nghĩa mẫu số, ví dụ số 
 Từ chuỗi keypoint và fall probability:
 
 ~~~text
-NORMAL → ANALYZING → FALL_DETECTED
+NORMAL → WARNING → CRITICAL
 ~~~
 
 Không cần hiện xác suất liên tục trên live view. Confidence nên đặt trong chi tiết sự kiện.
 
 ### 5.2 Cảnh báo ngã khẩn cấp
 
-Khi logic hai trong ba dự đoán vượt ngưỡng xác nhận ngã:
+Khi logic hai trong ba dự đoán vượt ngưỡng xác nhận ngã, runtime phát `FALL_SUSPECTED` và bbox chuyển vàng. Nếu người vẫn nằm sau 5 giây:
 
-- Bbox chuyển đỏ ổn định.
+- Bbox chuyển đỏ.
 - Hiện nhãn FALL DETECTED.
 - Camera được làm nổi bật.
 - Alert CRITICAL lên đầu danh sách.
@@ -189,11 +189,11 @@ Khi logic hai trong ba dự đoán vượt ngưỡng xác nhận ngã:
 ~~~text
 NORMAL
   ↓
-FALL_DETECTED
+WARNING
   ↓
-STILL_DOWN
+CRITICAL nếu vẫn nằm sau 5 giây
   ↓
-RECOVERED hoặc NEEDS_REVIEW
+NORMAL nếu đứng thẳng liên tục 2 giây
 ~~~
 
 Từ đó có thể tạo:
@@ -204,11 +204,11 @@ Từ đó có thể tạo:
 - Nhắc lại nếu chưa có phản hồi.
 - Phân biệt đã hồi phục và chưa xác định.
 
-STILL_DOWN và RECOVERED chưa phải đầu ra model; cần logic pose theo thời gian.
+Still-down và recovery là state runtime theo track, dùng phiếu góc thân người từ pose; đây không phải class đầu ra mới của model.
 
 ### 5.4 Fall suspected
 
-Có thể dùng làm cảnh báo sớm khi tư thế bất thường nhưng chưa đủ điều kiện FALL_DETECTED. Schema đã có FALL_SUSPECTED nhưng producer chưa nối runtime, nên đây là chức năng dự kiến.
+`FALL_SUSPECTED` là WARNING phát đúng một lần khi debounce ban đầu xác nhận cú ngã. Nếu vẫn nằm đủ 5 giây, runtime mới phát `FALL_DETECTED` CRITICAL.
 
 ### 5.5 Báo cáo ngã
 
@@ -490,8 +490,8 @@ Lớp cần thiết kế tiếp không phải model mới mà là **state nghi�
 | 3 | PPE hợp lệ bao lâu mới từ đỏ về xanh? | Chưa chốt |  |
 | 4 | PPE codes thay đổi có tạo event mới? | Chưa chốt |  |
 | 5 | Có cần event PPE resolved? | Chưa chốt |  |
-| 6 | Có cần still-down/recovered sau fall? | Chưa chốt |  |
-| 7 | Có dùng FALL_SUSPECTED trên UI? | Chưa chốt |  |
+| 6 | Có cần still-down/recovered sau fall? | Đã chốt | CRITICAL sau 5 giây vẫn nằm; NORMAL sau 2 giây đứng thẳng |
+| 7 | Có dùng FALL_SUSPECTED trên UI? | Đã chốt | Có, dùng cho WARNING ban đầu |
 | 8 | Fall clip lấy bao nhiêu giây trước/sau? | Chưa chốt |  |
 | 9 | Có cần zone exit/dwell/occupancy? | Chưa chốt |  |
 | 10 | Dùng thứ tự ưu tiên alert đề xuất? | Chưa chốt |  |

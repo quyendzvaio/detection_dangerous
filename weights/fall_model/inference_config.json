@@ -16,6 +16,10 @@
     "threshold_prev_f1macro": 0.525,
     "pose_source": "YOLO11n-pose, imgsz=640, conf=0.25 — bắt buộc khớp khi inference",
     "window_seconds_realtime": 1.0,
-    "min_real_points_per_window": 8
+    "min_real_points_per_window": 8,
+    "still_down_confirmation_seconds": 5.0,
+    "recovery_confirmation_seconds": 2.0,
+    "still_down_vote_ratio": 0.6,
+    "still_down_min_valid_frames": 3
   }
 }

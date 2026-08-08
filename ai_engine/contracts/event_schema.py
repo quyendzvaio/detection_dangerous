@@ -193,7 +193,7 @@ class FallDetectedEvent(SafetyEvent):
 
 @dataclass(frozen=True, kw_only=True)
 class FallSuspectedEvent(SafetyEvent):
-    """Safety-net contract retained by decision; no producer is wired yet."""
+    """Initial fall incident warning before persistent-down confirmation."""
 
     confidence: float
 

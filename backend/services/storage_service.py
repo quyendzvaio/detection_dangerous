@@ -71,5 +71,9 @@ class StorageService:
             )
         return metadata
 
+    def delete_object(self, key: str) -> None:
+        """Delete an object during retention cleanup."""
+        self._get_client().delete(key)
+
 
 storage_service = StorageService()

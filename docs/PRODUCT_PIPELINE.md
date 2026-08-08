@@ -22,7 +22,6 @@ Chưa thuộc phần hoàn thiện:
 - Lifecycle/retention rule tự xóa blob Azure cũ và recovery tự động cho fall clip bị dừng giữa lúc đang thu hậu cảnh.
 - Azure Blob Cloud thật đã được smoke test end-to-end: backend cấp SAS, PUT trả 201, blob properties được xác minh, database chuyển READY và SAS GET trả 200 với bytes khớp.
 - Re-ID: không có trong runtime hoặc model toggle của giai đoạn này.
-- `FALL_SUSPECTED`: contract đã giữ theo quyết định sản phẩm, nhưng producer/policy phát event chưa được nối.
 
 ## 2. Kiến thức nền cần thống nhất
 
@@ -147,9 +146,9 @@ Mỗi track có buffer keypoint theo thời gian. Tiền xử lý:
 5. Thêm đặc trưng chuyển động, tạo tensor `(1, 60, 85)`.
 6. Gửi tensor tới `fall_model` trên Triton, nhận probability.
 
-Model là bộ phân loại chuỗi keypoint dùng quan hệ không gian giữa các keypoint và quan hệ thời gian giữa các frame. Chất lượng pose/keypoint đầu vào ảnh hưởng trực tiếp kết quả. Quyết định hiện tại dùng threshold trong `weights/fall_model/inference_config.json`, debounce 2 phiếu dương trong 3 lần dự đoán và cooldown trước khi phát lại. Khi phát `FALL_DETECTED`, overlay latch đỏ cho tới khi track biến mất đủ TTL hoặc được clear rõ ràng.
+Model là bộ phân loại chuỗi keypoint dùng quan hệ không gian giữa các keypoint và quan hệ thời gian giữa các frame. Chất lượng pose/keypoint đầu vào ảnh hưởng trực tiếp kết quả. Quyết định dùng threshold trong `weights/fall_model/inference_config.json` và debounce 2 phiếu dương trong 3 lần dự đoán. Lần xác nhận đầu mở incident `WARNING` và phát `FALL_SUSPECTED`. Nếu heuristic tư thế xác nhận người vẫn nằm sau 5 giây, incident chuyển `CRITICAL` và phát đúng một `FALL_DETECTED`. Nếu tư thế đứng thẳng liên tục 2 giây, incident và overlay trở về `NORMAL`; pose không đủ tin cậy không được dùng để kết luận đã hồi phục.
 
-`FALL_SUSPECTED` có schema WARNING để làm lưới an toàn, nhưng chưa có rule producer được đội sản phẩm chốt. Không tự phát nó từ heuristic trước khi có threshold/debounce/test riêng.
+Các mốc 5 giây, 2 giây, tỷ lệ phiếu tư thế và số frame hợp lệ tối thiểu đều nằm trong `_notes` của `weights/fall_model/inference_config.json`.
 
 ### PPE
 
@@ -179,7 +178,7 @@ Không dùng `schema_version`, `sequence_id`, `ai_metadata_json`, `person_id`, `
 |---|---|---|---|
 | `PPEViolationEvent` | `violation_codes[]` | DANGER | Ảnh annotate |
 | `FallDetectedEvent` | `confidence` | CRITICAL | Thumbnail + video pre/post |
-| `FallSuspectedEvent` | `confidence` | WARNING | Chưa nối producer/policy |
+| `FallSuspectedEvent` | `confidence` | WARNING | Ảnh tại lần xác nhận ngã đầu tiên |
 | `RestrictedZoneEvent` | `zone_id` | DANGER | Ảnh annotate có polygon |
 
 Ví dụ PPE:
@@ -221,7 +220,7 @@ Safety Event được commit PostgreSQL trước, sau đó mới broadcast WebSo
 
 ## 8. Bật/tắt model theo camera
 
-`ModelToggles(zone, fall, ppe)` nằm trong config của từng `Layer2Runtime`. Bảng `cameras` đã có ba cột toggle riêng; launcher local đăng ký giá trị CLI vào các cột này. Luồng control backend → process để áp dụng thay đổi runtime chưa được nối, nên sửa database lúc camera đang chạy chưa tự gọi `set_models()`.
+`ModelToggles(zone, fall, ppe)` nằm trong config của từng `Layer2Runtime`. Bảng `cameras` có ba cột toggle riêng; launcher đăng ký giá trị CLI vào các cột này, sau đó polling `runtime-config` theo revision và ACK để áp dụng thay đổi từng camera vào `Layer2Runtime.set_models()`.
 
 Re-ID cố ý không có trong `ModelToggles`. Nếu control sau này gửi key không thuộc `zone/fall/ppe`, runtime từ chối thay vì âm thầm nhận cấu hình không chạy.
 
@@ -248,7 +247,7 @@ SAS URL là bearer credential có quyền và thời hạn hẹp; ai có URL cò
 | `PPE_VIOLATION` | IMAGE `image/jpeg` | Frame gần event, bbox + nhãn lỗi |
 | `RESTRICTED_ZONE` | IMAGE `image/jpeg` | Frame gần event, bbox + nhãn zone; polygon chờ zone-config sync |
 | `FALL_DETECTED` | IMAGE + VIDEO | Thumbnail và clip mặc định 5 giây trước + 5 giây sau |
-| `FALL_SUSPECTED` | IMAGE | Contract sẵn; producer chưa bật |
+| `FALL_SUSPECTED` | IMAGE | Frame tại lúc incident chuyển WARNING |
 
 Frame evidence được lấy mẫu mặc định 8 FPS, JPEG quality 82. Encode JPEG/MP4 chạy ngoài hot loop; frame queue chỉ có hai slot và bỏ frame evidence cũ khi chậm. Ring buffer giữ JPEG đã nén, không giữ hàng trăm raw BGR frame trong RAM. Fall MP4 dùng H.264 (`libx264`), `yuv420p` và `faststart` để phát ổn định trên trình duyệt; clip `mp4v` cũ phải chuyển mã nếu cần giữ lại.
 

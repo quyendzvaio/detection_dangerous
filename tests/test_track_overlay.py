@@ -4,7 +4,11 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from ai_engine.contracts.event_schema import FallDetectedEvent, RestrictedZoneEvent
+from ai_engine.contracts.event_schema import (
+    FallDetectedEvent,
+    FallSuspectedEvent,
+    RestrictedZoneEvent,
+)
 from ai_engine.pipeline.layer2_runtime import LocalTrackUpdate
 from ai_engine.visualization.track_overlay import OverlayStateStore
 
@@ -104,3 +108,23 @@ def test_missing_track_prunes_latched_state():
     assert "cam1-7" in store.snapshot()
     store.mark_seen([], now=13.1)
     assert "cam1-7" not in store.snapshot()
+
+
+def test_fall_overlay_transitions_warning_critical_normal():
+    store = OverlayStateStore()
+    store.apply_event(
+        FallSuspectedEvent(
+            camera_id=1, track_id="cam1-7", detected_at=1.0, confidence=0.8
+        )
+    )
+    state = store.snapshot()["cam1-7"]
+    assert state.fall_warning is True
+    assert state.severity == "WARNING"
+
+    store.apply_event(fall_event(detected_at=11.0, confidence=0.8))
+    state = store.snapshot()["cam1-7"]
+    assert state.fall_warning is False
+    assert state.severity == "CRITICAL"
+
+    store.apply_update(update("fall", captured_at=13.0, phase="NORMAL"))
+    state = store.snapshot()["cam1-7"]

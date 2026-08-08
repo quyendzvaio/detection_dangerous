@@ -15,6 +15,7 @@ from ai_engine.analytics.ppe_detection import PPEDetector
 from ai_engine.analytics.zone import ZoneChecker
 from ai_engine.contracts.event_schema import (
     FallDetectedEvent,
+    FallSuspectedEvent,
     FallTask,
     PPEViolationEvent,
     PpeTask,
@@ -395,22 +396,32 @@ class Layer2Runtime:
             result = processor.process(task)
             if not self.control.models().fall or self._branch_epoch("fall") != epoch:
                 continue
-            if result.probability is not None:
+            if result.probability is not None or result.phase != "NORMAL" or result.recovered:
                 self._update(
                     "fall",
                     task.track_id,
                     task.captured_at,
                     probability=result.probability,
-                    detected=result.alert_fired,
+                    phase=result.phase,
                     threshold=processor.config.threshold,
                 )
-            if result.alert_fired:
+            confidence = result.event_confidence
+            if result.warning_fired and confidence is not None:
+                self._emit(
+                    FallSuspectedEvent(
+                        camera_id=task.camera_id,
+                        track_id=task.track_id,
+                        detected_at=task.captured_at,
+                        confidence=float(confidence),
+                    )
+                )
+            if result.critical_fired and confidence is not None:
                 self._emit(
                     FallDetectedEvent(
                         camera_id=task.camera_id,
                         track_id=task.track_id,
                         detected_at=task.captured_at,
-                        confidence=float(result.probability),
+                        confidence=float(confidence),
                     )
                 )
             self._processed["fall"] += 1

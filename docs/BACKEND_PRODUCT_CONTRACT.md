@@ -161,7 +161,7 @@ Nguồn có thể là USB index, video file hoặc RTSP. Backend không trả cr
 AI hiện có:
 
 - PPE: NO_HELMET, NO_GLASSES, NO_GLOVES, NO_VEST.
-- Fall: contract có FALL_SUSPECTED và FALL_DETECTED.
+- Fall: runtime phát FALL_SUSPECTED WARNING ban đầu và FALL_DETECTED CRITICAL nếu vẫn nằm sau 5 giây.
 - Zone: track đi vào polygon, event dùng zone_id.
 
 State cần bổ sung:
@@ -184,7 +184,7 @@ Luồng đề xuất:
 5. Camera ACK revision/applied state/error.
 6. UI cập nhật trạng thái thật.
 
-**CẦN HOÀN THIỆN:** code mới có zone_enabled, fall_enabled, ppe_enabled; chưa desired/applied, revision, config endpoint và ACK.
+Backend đã có desired/applied toggle, config revision, runtime-config endpoint và ACK; runner polling sẽ áp dụng riêng cho từng camera.
 
 ### 6.6 Zone
 
@@ -204,7 +204,7 @@ Event chỉ cần zone_id, không cần zone_name. Evidence cũ là snapshot l�
 | Loại | Severity | Dữ liệu riêng | Evidence |
 |---|---|---|---|
 | PPE_VIOLATION | DANGER | violation_codes[] | JPEG |
-| FALL_SUSPECTED | WARNING | confidence | Cần chốt |
+| FALL_SUSPECTED | WARNING | confidence | JPEG |
 | FALL_DETECTED | CRITICAL | confidence | JPEG + MP4 |
 | RESTRICTED_ZONE | DANGER | zone_id | JPEG |
 
@@ -471,7 +471,7 @@ Khuyến nghị dùng Mục 11.
 
 13. Nhiều PPE code là một record hay nhiều? Hiện là một record + list.
 14. PPE giảm từ bốn lỗi còn một thì khi nào hết đỏ?
-15. FALL_SUSPECTED lưu/hiện hay chỉ nội bộ?
+15. FALL_SUSPECTED được lưu/hiện như WARNING và có JPEG evidence.
 16. Cooldown theo track/type bao lâu?
 17. Có gộp event thành incident?
 18. Severity cố định hay cấu hình?

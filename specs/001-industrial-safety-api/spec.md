@@ -25,7 +25,7 @@ Có. Với phạm vi nhóm vừa thống nhất, MVP gồm đủ các khối c�
 | Realtime | WebSocket báo alert/status; REST dùng để tải lại dữ liệu |
 | Metrics | FPS, latency và thời điểm frame cuối hiển thị ở góc live view |
 
-MVP **không cần** báo cáo nâng cao, Re-ID, workflow review/resolve, nhiều role hoặc các state sau khi người đã ngã.
+MVP **không cần** báo cáo nâng cao, Re-ID, workflow review/resolve hoặc nhiều role. Fall có state tối thiểu WARNING, CRITICAL và recovery tự động.
 
 ## 2. Các quyết định đã chốt
 
@@ -170,12 +170,13 @@ Hệ thống thu chuỗi keypoint của từng track và phân tích Fall.
 
 **Acceptance**:
 
-1. Khi chưa đủ chuỗi, state có thể là ANALYZING/WARNING nhưng không tạo Fall alert.
-2. Khi logic Fall xác nhận ngã, track chuyển CRITICAL.
-3. Hệ thống tạo đúng một FALL_DETECTED event theo debounce/cooldown hiện tại.
-4. Event được lưu PostgreSQL kèm confidence.
-5. Hệ thống lưu ảnh và video evidence.
-6. Không cần STILL_DOWN, RECOVERED hoặc Fall report trong MVP.
+1. Khi chưa đủ chuỗi, hệ thống không tạo Fall event.
+2. Khi logic Fall lần đầu xác nhận ngã, track chuyển WARNING và tạo đúng một FALL_SUSPECTED event.
+3. Nếu người vẫn nằm đủ 5 giây từ lúc WARNING, track chuyển CRITICAL và tạo đúng một FALL_DETECTED event.
+4. Nếu người đứng thẳng liên tục 2 giây, trạng thái realtime trở về NORMAL; pose thiếu tin cậy không được coi là đã hồi phục.
+5. Mỗi incident chỉ tạo một WARNING và tối đa một CRITICAL.
+6. Event được lưu PostgreSQL kèm confidence.
+7. FALL_SUSPECTED lưu ảnh; FALL_DETECTED lưu ảnh và video evidence.
 
 ### US-06 — Quản lý và phát hiện Zone (P1)
 
@@ -381,7 +382,7 @@ WebSocket không replay. UI reconnect xong phải gọi REST để lấy lại a
 |---|---|---|---|
 | PPE_VIOLATION | violation_codes[] | DANGER | JPEG |
 | FALL_DETECTED | confidence | CRITICAL | JPEG + MP4 |
-| FALL_SUSPECTED | confidence | WARNING | Phase 2, chưa có producer |
+| FALL_SUSPECTED | confidence | WARNING | JPEG tại cảnh báo ban đầu |
 | RESTRICTED_ZONE | zone_id | DANGER | JPEG |
 
 Field chung:

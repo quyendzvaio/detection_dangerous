@@ -37,6 +37,13 @@ class Settings(BaseModel):
         "AZURE_STORAGE_CREATE_CONTAINER", "false"
     ).lower() in {"1", "true", "yes"}
 
+    VIOLATION_RETENTION_DAYS: int = int(os.getenv("VIOLATION_RETENTION_DAYS", "3"))
+    VIOLATION_MAX_COUNT: int = int(os.getenv("VIOLATION_MAX_COUNT", "1000"))
+    VIOLATION_KEEP_COUNT: int = int(os.getenv("VIOLATION_KEEP_COUNT", "500"))
+    VIOLATION_RETENTION_INTERVAL_SECONDS: int = int(
+        os.getenv("VIOLATION_RETENTION_INTERVAL_SECONDS", "3600")
+    )
+
     CORS_ORIGINS: List[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
