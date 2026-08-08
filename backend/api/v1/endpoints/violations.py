@@ -30,10 +30,11 @@ def list_violations(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     return violation_service.get_violations(
         db,
+        current_user.tenant_id,
         camera_id=camera_id,
         violation_type=violation_type,
         severity_level=severity_level,
@@ -46,9 +47,11 @@ def list_violations(
 def get_violation(
     violation_id: int,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    violation = violation_service.get_violation_by_id(db, violation_id)
+    violation = violation_service.get_violation_by_id(
+        db, current_user.tenant_id, violation_id
+    )
     if violation is None:
         raise HTTPException(status_code=404, detail="Violation not found")
     return violation
@@ -59,10 +62,10 @@ def get_violation_presigned_url(
     violation_id: int,
     expires_in_seconds: int = Query(3600, ge=60, le=86400),
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     return violation_service.get_presigned_urls(
-        db, violation_id, expires_in_seconds=expires_in_seconds
+        db, current_user.tenant_id, violation_id, expires_in_seconds=expires_in_seconds
     )
 
 

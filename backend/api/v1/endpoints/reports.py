@@ -12,7 +12,7 @@ router = APIRouter()
 @router.get("/summary", response_model=ReportSummaryOut)
 def get_report_summary(
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """API tổng hợp báo cáo và thống kê vi phạm an toàn lao động."""
-    return report_service.get_summary(db)
+    return report_service.get_summary(db, current_user.tenant_id)

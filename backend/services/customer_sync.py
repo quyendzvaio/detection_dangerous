@@ -21,8 +21,11 @@ from pydantic import TypeAdapter
 
 from backend.core.config import settings
 from backend.db.session import SessionLocal
+from backend.models.db.control_plane import Tenant
+from backend.models.schemas.control_plane import TenantCreate
 from backend.models.schemas.event import SafetyEventRequest
 from backend.services.camera_service import camera_service
+from backend.services.control_plane_service import create_tenant
 from backend.services.violation_service import violation_service
 
 log = logging.getLogger(__name__)
@@ -74,8 +77,19 @@ class CustomerSync:
         payload = envelope.get("payload")
         if not isinstance(payload, dict):
             raise ValueError("envelope payload must be an object")
+        # Tenant source: the envelope's tenant_key (MQTT-trusted identity).
+        tenant_key = str(envelope.get("tenant_key") or "")
+        if not tenant_key:
+            raise ValueError("envelope tenant_key is required")
         db: Session = self.db_factory()
         try:
+            tenant = db.query(Tenant).filter(Tenant.tenant_key == tenant_key).first()
+            if tenant is None:
+                tenant = create_tenant(
+                    db, TenantCreate(tenant_key=tenant_key, name=tenant_key)
+                )
+            tenant_id = tenant.id
+
             # Evidence-completion message: payload has event_id + READY status
             # and the storage keys are actually signed download URLs.
             if (
@@ -83,12 +97,12 @@ class CustomerSync:
                 and payload.get("evidence_status") == "READY"
                 and "camera_id" not in payload
             ):
-                self._sync_evidence_message(db, envelope)
+                self._sync_evidence_message(db, envelope, tenant_id)
                 return
 
             # 1. Ensure the camera exists locally (map by camera_id).
             camera_id = int(payload["camera_id"])
-            if not self._ensure_camera(db, camera_id, envelope):
+            if not self._ensure_camera(db, tenant_id, camera_id, envelope):
                 log.info(
                     "customer sync: camera_id=%s missing, skipping event %s",
                     camera_id,
@@ -98,7 +112,7 @@ class CustomerSync:
 
             # 2. Idempotent ingest (duplicates are no-ops).
             event = _event_adapter.validate_python(payload)
-            violation, created = violation_service.ingest_event(db, event)
+            violation, created = violation_service.ingest_event(db, tenant_id, event)
             if created:
                 log.info(
                     "customer sync: ingested %s violation_id=%s event_id=%s",
@@ -109,7 +123,7 @@ class CustomerSync:
         finally:
             db.close()
 
-    def _sync_evidence_message(self, db: Session, envelope: dict) -> None:
+    def _sync_evidence_message(self, db: Session, envelope: dict, tenant_id: int) -> None:
         """Handle the worker's second MQTT message carrying evidence URLs."""
         from uuid import UUID
 
@@ -118,7 +132,12 @@ class CustomerSync:
         payload = envelope.get("payload") or {}
         event_id = UUID(str(payload["event_id"]))
         violation = (
-            db.query(Violation).filter(Violation.event_id == event_id).first()
+            db.query(Violation)
+            .filter(
+                Violation.event_id == event_id,
+                Violation.tenant_id == tenant_id,
+            )
+            .first()
         )
         if violation is None or violation.evidence_status == "READY":
             return
@@ -145,10 +164,16 @@ class CustomerSync:
                 len(downloaded),
             )
 
-    def _ensure_camera(self, db: Session, camera_id: int, envelope: dict) -> bool:
+    def _ensure_camera(
+        self, db: Session, tenant_id: int, camera_id: int, envelope: dict
+    ) -> bool:
         from backend.models.db.camera import Camera
 
-        camera = db.query(Camera).filter(Camera.id == camera_id).first()
+        camera = (
+            db.query(Camera)
+            .filter(Camera.id == camera_id, Camera.tenant_id == tenant_id)
+            .first()
+        )
         if camera is not None and camera.deleted_at is None:
             return True
         if camera is None:
@@ -163,7 +188,7 @@ class CustomerSync:
                     source_type="RTSP",
                 )
                 camera, _created = camera_service.register_runtime_camera(
-                    db, camera_id, registration
+                    db, tenant_id, camera_id, registration
                 )
                 log.info(
                     "customer sync: registered camera_id=%s key=%s",

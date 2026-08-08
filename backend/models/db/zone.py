@@ -10,6 +10,7 @@ class Zone(Base):
     __tablename__ = "zones"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     camera_id = Column(Integer, ForeignKey("cameras.id"), nullable=False, index=True)
     name = Column(String(100), nullable=False)
     polygon_json = Column(JSON, nullable=False)

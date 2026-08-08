@@ -13,27 +13,27 @@ router = APIRouter()
 def list_zones(
     camera_id: int | None = Query(None),
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    return zone_service.get_zones(db, camera_id=camera_id)
+    return zone_service.get_zones(db, current_user.tenant_id, camera_id=camera_id)
 
 
 @router.post("", response_model=ZoneOut, status_code=status.HTTP_201_CREATED)
 def create_zone(
     zone_in: ZoneCreate,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    return zone_service.create_zone(db, zone_in)
+    return zone_service.create_zone(db, current_user.tenant_id, zone_in)
 
 
 @router.get("/{zone_id}", response_model=ZoneOut)
 def get_zone(
     zone_id: int,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    zone = zone_service.get_zone_by_id(db, zone_id)
+    zone = zone_service.get_zone_by_id(db, current_user.tenant_id, zone_id)
     if zone is None:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Zone not found")
@@ -46,15 +46,15 @@ def update_zone(
     zone_id: int,
     zone_in: ZoneUpdate,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    return zone_service.update_zone(db, zone_id, zone_in)
+    return zone_service.update_zone(db, current_user.tenant_id, zone_id, zone_in)
 
 
 @router.delete("/{zone_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_zone(
     zone_id: int,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    zone_service.delete_zone(db, zone_id)
+    zone_service.delete_zone(db, current_user.tenant_id, zone_id)

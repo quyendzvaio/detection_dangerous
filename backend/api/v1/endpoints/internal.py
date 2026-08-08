@@ -26,7 +26,11 @@ from backend.models.schemas.event import (
     EventIngestResponse,
     SafetyEventRequest,
 )
+from backend.models.db.camera import Camera
+from backend.models.db.control_plane import Tenant
+from backend.models.schemas.control_plane import TenantCreate
 from backend.services.camera_service import camera_service
+from backend.services.control_plane_service import create_tenant
 from backend.services.evidence_service import evidence_service
 from backend.services.system_event_service import system_event_service
 from backend.services.violation_service import violation_service
@@ -42,6 +46,22 @@ def require_ai_service(authorization: str | None = Header(default=None)) -> None
         raise HTTPException(status_code=401, detail="Invalid AI service credentials")
 
 
+def _m2m_tenant_id(db: Session, camera_id: int | None = None) -> int:
+    """M2M tenant source: the camera's tenant, else the default 'cloud' tenant."""
+    if camera_id is not None:
+        camera = (
+            db.query(Camera)
+            .filter(Camera.id == camera_id, Camera.tenant_id.isnot(None))
+            .first()
+        )
+        if camera is not None:
+            return camera.tenant_id
+    tenant = db.query(Tenant).filter(Tenant.tenant_key == "cloud").first()
+    if tenant is None:
+        tenant = create_tenant(db, TenantCreate(tenant_key="cloud", name="cloud"))
+    return tenant.id
+
+
 @router.put("/cameras/{camera_id}", response_model=CameraOut)
 def register_runtime_camera(
     camera_id: int,
@@ -52,7 +72,9 @@ def register_runtime_camera(
 ):
     if camera_id <= 0:
         raise HTTPException(status_code=422, detail="camera_id must be positive")
-    camera, created = camera_service.register_runtime_camera(db, camera_id, payload)
+    camera, created = camera_service.register_runtime_camera(
+        db, _m2m_tenant_id(db, camera_id), camera_id, payload
+    )
     response.status_code = 201 if created else 200
     return camera
 
@@ -65,7 +87,7 @@ def get_runtime_config(
     db: Session = Depends(get_db),
     _authorized: None = Depends(require_ai_service),
 ):
-    return camera_service.get_runtime_config(db, camera_id)
+    return camera_service.get_runtime_config(db, _m2m_tenant_id(db, camera_id), camera_id)
 
 
 @router.post(
@@ -78,7 +100,9 @@ def acknowledge_runtime_config(
     db: Session = Depends(get_db),
     _authorized: None = Depends(require_ai_service),
 ):
-    camera = camera_service.acknowledge_runtime_config(db, camera_id, payload)
+    camera = camera_service.acknowledge_runtime_config(
+        db, _m2m_tenant_id(db, camera_id), camera_id, payload
+    )
     background_tasks.add_task(
         alerts_manager.broadcast,
         {
@@ -99,7 +123,7 @@ def update_camera_telemetry(
     db: Session = Depends(get_db),
     _authorized: None = Depends(require_ai_service),
 ):
-    return camera_service.update_telemetry(db, camera_id, payload)
+    return camera_service.update_telemetry(db, _m2m_tenant_id(db, camera_id), camera_id, payload)
 
 
 @router.post("/cameras/{camera_id}/frame", status_code=204)
@@ -110,7 +134,7 @@ async def update_camera_frame(
     db: Session = Depends(get_db),
     _authorized: None = Depends(require_ai_service),
 ):
-    if camera_service.get_camera_by_id(db, camera_id) is None:
+    if camera_service.get_camera_by_id(db, _m2m_tenant_id(db, camera_id), camera_id) is None:
         raise HTTPException(status_code=404, detail="Camera not found")
     if request.headers.get("content-type", "").split(";", 1)[0] != "image/jpeg":
         raise HTTPException(status_code=415, detail="Frame must be image/jpeg")
@@ -130,7 +154,9 @@ async def receive_safety_event(
     db: Session = Depends(get_db),
     _authorized: None = Depends(require_ai_service),
 ):
-    violation, created = violation_service.ingest_event(db, payload)
+    violation, created = violation_service.ingest_event(
+        db, _m2m_tenant_id(db, payload.camera_id), payload
+    )
     response.status_code = 201 if created else 200
     if created:
         message = payload.model_dump(mode="json")

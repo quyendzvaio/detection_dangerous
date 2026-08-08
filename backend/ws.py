@@ -76,7 +76,12 @@ class CameraFrameConnectionManager:
 camera_frames_manager = CameraFrameConnectionManager()
 
 
-def authenticated_user_id(websocket: WebSocket) -> int | None:
+def authenticated_user_id(websocket: WebSocket) -> tuple[int, int] | None:
+    """Return (user_id, tenant_id) for an authenticated WS, else None.
+
+    tenant_id comes from the JWT claim (the WS has no HTTP body to carry it;
+    the claim was minted by the trusted login flow).
+    """
     protocols = [
         item.strip()
         for item in websocket.headers.get("sec-websocket-protocol", "").split(",")
@@ -87,11 +92,14 @@ def authenticated_user_id(websocket: WebSocket) -> int | None:
         return None
     try:
         user_id = int(payload["sub"])
+        tenant_id = int(payload.get("tenant_id"))
     except (TypeError, ValueError):
         return None
     with SessionLocal() as db:
         user = db.query(User).filter(User.id == user_id, User.is_active.is_(True)).first()
-    return user_id if user is not None else None
+    if user is None or user.tenant_id != tenant_id:
+        return None
+    return user_id, user.tenant_id
 
 
 async def alerts_endpoint(websocket: WebSocket) -> None:
@@ -109,11 +117,21 @@ async def alerts_endpoint(websocket: WebSocket) -> None:
 async def camera_frames_endpoint(
     websocket: WebSocket, camera_id: int, overlay: bool
 ) -> None:
-    if authenticated_user_id(websocket) is None:
+    identity = authenticated_user_id(websocket)
+    if identity is None:
         await websocket.close(code=4401, reason="Authentication required")
         return
+    _, tenant_id = identity
     with SessionLocal() as db:
-        camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
+        camera = (
+            db.query(Camera)
+            .filter(
+                Camera.id == camera_id,
+                Camera.tenant_id == tenant_id,
+                Camera.deleted_at.is_(None),
+            )
+            .first()
+        )
     if camera is None:
         await websocket.close(code=4404, reason="Camera not found")
         return

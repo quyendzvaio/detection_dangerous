@@ -22,13 +22,16 @@ class ViolationService:
     @staticmethod
     def get_violations(
         db: Session,
+        tenant_id: int,
         camera_id: int | None = None,
         violation_type: str | None = None,
         severity_level: str | None = None,
         skip: int = 0,
         limit: int = 50,
     ) -> list[Violation]:
-        query = db.query(Violation).filter(Violation.deleted_at.is_(None))
+        query = db.query(Violation).filter(
+            Violation.deleted_at.is_(None), Violation.tenant_id == tenant_id
+        )
         if camera_id is not None:
             query = query.filter(Violation.camera_id == camera_id)
         if violation_type is not None:
@@ -43,26 +46,41 @@ class ViolationService:
         )
 
     @staticmethod
-    def get_violation_by_id(db: Session, violation_id: int) -> Violation | None:
+    def get_violation_by_id(
+        db: Session, tenant_id: int, violation_id: int
+    ) -> Violation | None:
         return (
             db.query(Violation)
-            .filter(Violation.id == violation_id, Violation.deleted_at.is_(None))
+            .filter(
+                Violation.id == violation_id,
+                Violation.tenant_id == tenant_id,
+                Violation.deleted_at.is_(None),
+            )
             .first()
         )
 
     @staticmethod
     def ingest_event(
-        db: Session, event: SafetyEventRequest
+        db: Session, tenant_id: int, event: SafetyEventRequest
     ) -> tuple[Violation, bool]:
         existing = (
-            db.query(Violation).filter(Violation.event_id == event.event_id).first()
+            db.query(Violation)
+            .filter(
+                Violation.event_id == event.event_id,
+                Violation.tenant_id == tenant_id,
+            )
+            .first()
         )
         if existing is not None:
             return existing, False
 
         camera = (
             db.query(Camera)
-            .filter(Camera.id == event.camera_id, Camera.deleted_at.is_(None))
+            .filter(
+                Camera.id == event.camera_id,
+                Camera.tenant_id == tenant_id,
+                Camera.deleted_at.is_(None),
+            )
             .first()
         )
         if camera is None:
@@ -74,7 +92,11 @@ class ViolationService:
         if isinstance(event, RestrictedZoneRequest):
             zone = (
                 db.query(Zone)
-                .filter(Zone.id == event.zone_id, Zone.camera_id == event.camera_id)
+                .filter(
+                    Zone.id == event.zone_id,
+                    Zone.camera_id == event.camera_id,
+                    Zone.tenant_id == tenant_id,
+                )
                 .first()
             )
             if zone is None:
@@ -91,6 +113,7 @@ class ViolationService:
 
         violation = Violation(
             event_id=event.event_id,
+            tenant_id=tenant_id,
             camera_id=event.camera_id,
             track_id=event.track_id,
             detected_time=detected_time,
@@ -113,7 +136,10 @@ class ViolationService:
             db.rollback()
             duplicate = (
                 db.query(Violation)
-                .filter(Violation.event_id == event.event_id)
+                .filter(
+                    Violation.event_id == event.event_id,
+                    Violation.tenant_id == tenant_id,
+                )
                 .first()
             )
             if duplicate is None:
@@ -122,9 +148,9 @@ class ViolationService:
 
     @staticmethod
     def get_presigned_urls(
-        db: Session, violation_id: int, expires_in_seconds: int = 3600
+        db: Session, tenant_id: int, violation_id: int, expires_in_seconds: int = 3600
     ) -> PresignedUrlOut:
-        violation = ViolationService.get_violation_by_id(db, violation_id)
+        violation = ViolationService.get_violation_by_id(db, tenant_id, violation_id)
         if violation is None:
             raise HTTPException(status_code=404, detail="Violation not found")
         if violation.evidence_status != "READY":

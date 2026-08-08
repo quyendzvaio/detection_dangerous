@@ -13,15 +13,25 @@ from backend.models.schemas.report import (
 
 class ReportService:
     @staticmethod
-    def get_summary(db: Session) -> ReportSummaryOut:
-        total_violations = db.query(Violation).filter(Violation.deleted_at.is_(None)).count()
-        total_cameras = db.query(Camera).filter(Camera.deleted_at.is_(None)).count()
-        total_users = db.query(User).filter(User.is_active == True).count()
+    def get_summary(db: Session, tenant_id: int) -> ReportSummaryOut:
+        total_violations = (
+            db.query(Violation)
+            .filter(Violation.deleted_at.is_(None), Violation.tenant_id == tenant_id)
+            .count()
+        )
+        total_cameras = (
+            db.query(Camera)
+            .filter(Camera.deleted_at.is_(None), Camera.tenant_id == tenant_id)
+            .count()
+        )
+        total_users = (
+            db.query(User).filter(User.is_active == True, User.tenant_id == tenant_id).count()
+        )
 
         # Group by violation_type
         type_counts = (
             db.query(Violation.violation_type, func.count(Violation.id))
-            .filter(Violation.deleted_at.is_(None))
+            .filter(Violation.deleted_at.is_(None), Violation.tenant_id == tenant_id)
             .group_by(Violation.violation_type)
             .all()
         )
@@ -34,7 +44,12 @@ class ReportService:
         cam_counts = (
             db.query(Camera.id, Camera.name, func.count(Violation.id))
             .join(Violation, Violation.camera_id == Camera.id)
-            .filter(Camera.deleted_at.is_(None), Violation.deleted_at.is_(None))
+            .filter(
+                Camera.deleted_at.is_(None),
+                Camera.tenant_id == tenant_id,
+                Violation.deleted_at.is_(None),
+                Violation.tenant_id == tenant_id,
+            )
             .group_by(Camera.id, Camera.name)
             .all()
         )

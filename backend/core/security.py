@@ -46,15 +46,21 @@ def _b64_decode(data_str: str) -> bytes:
     return base64.urlsafe_b64decode(data_str + padding)
 
 
-def create_access_token(subject: Union[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(
+    subject: Union[str, Any],
+    expires_delta: Optional[timedelta] = None,
+    tenant_id: Optional[int] = None,
+) -> str:
     """Generate Access Token (PyJWT or fallback HMAC-SHA256)."""
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    
+
     exp_ts = int(expire.timestamp())
     payload = {"exp": exp_ts, "sub": str(subject)}
+    if tenant_id is not None:
+        payload["tenant_id"] = tenant_id
 
     if HAS_PYJWT:
         return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.ALGORITHM)

@@ -31,23 +31,32 @@ class CameraService:
         camera.config_error = None
 
     @staticmethod
-    def get_all_cameras(db: Session, include_deleted: bool = False) -> list[Camera]:
-        query = db.query(Camera)
+    def get_all_cameras(
+        db: Session, tenant_id: int, include_deleted: bool = False
+    ) -> list[Camera]:
+        query = db.query(Camera).filter(Camera.tenant_id == tenant_id)
         if not include_deleted:
             query = query.filter(Camera.deleted_at.is_(None))
         return query.order_by(Camera.id).all()
 
     @staticmethod
-    def get_camera_by_id(db: Session, camera_id: int) -> Camera | None:
+    def get_camera_by_id(
+        db: Session, tenant_id: int, camera_id: int
+    ) -> Camera | None:
         return (
             db.query(Camera)
-            .filter(Camera.id == camera_id, Camera.deleted_at.is_(None))
+            .filter(
+                Camera.id == camera_id,
+                Camera.tenant_id == tenant_id,
+                Camera.deleted_at.is_(None),
+            )
             .first()
         )
 
     @staticmethod
-    def create_camera(db: Session, camera_in: CameraCreate) -> Camera:
+    def create_camera(db: Session, tenant_id: int, camera_in: CameraCreate) -> Camera:
         camera = Camera(**camera_in.model_dump())
+        camera.tenant_id = tenant_id
         camera.status = "OFFLINE"
         camera.config_status = "OFFLINE"
         db.add(camera)
@@ -64,19 +73,23 @@ class CameraService:
 
     @staticmethod
     def register_runtime_camera(
-        db: Session, camera_id: int, registration: CameraRuntimeRegistration
+        db: Session, tenant_id: int, camera_id: int, registration: CameraRuntimeRegistration
     ) -> tuple[Camera, bool]:
         """Idempotently register a camera for machine-to-machine ingestion."""
-        camera = db.query(Camera).filter(Camera.id == camera_id).first()
+        camera = (
+            db.query(Camera).filter(Camera.id == camera_id, Camera.tenant_id == tenant_id).first()
+        )
         key_owner = (
-            db.query(Camera).filter(Camera.camera_key == registration.camera_key).first()
+            db.query(Camera)
+            .filter(Camera.camera_key == registration.camera_key, Camera.tenant_id == tenant_id)
+            .first()
         )
         if key_owner is not None and key_owner.id != camera_id:
             raise HTTPException(status_code=409, detail="camera_key belongs to another camera")
 
         created = camera is None
         if created:
-            camera = Camera(id=camera_id)
+            camera = Camera(id=camera_id, tenant_id=tenant_id)
             db.add(camera)
         registration_data = registration.model_dump()
         if not created:
@@ -106,8 +119,10 @@ class CameraService:
         return camera, created
 
     @staticmethod
-    def update_camera(db: Session, camera_id: int, camera_in: CameraUpdate) -> Camera:
-        camera = CameraService.get_camera_by_id(db, camera_id)
+    def update_camera(
+        db: Session, tenant_id: int, camera_id: int, camera_in: CameraUpdate
+    ) -> Camera:
+        camera = CameraService.get_camera_by_id(db, tenant_id, camera_id)
         if camera is None:
             raise HTTPException(status_code=404, detail="Camera not found")
         changes = camera_in.model_dump(exclude_unset=True)
@@ -129,8 +144,8 @@ class CameraService:
         return camera
 
     @staticmethod
-    def delete_camera(db: Session, camera_id: int) -> None:
-        camera = CameraService.get_camera_by_id(db, camera_id)
+    def delete_camera(db: Session, tenant_id: int, camera_id: int) -> None:
+        camera = CameraService.get_camera_by_id(db, tenant_id, camera_id)
         if camera is None:
             raise HTTPException(status_code=404, detail="Camera not found")
         camera.deleted_at = datetime.now(timezone.utc)
@@ -139,14 +154,15 @@ class CameraService:
         db.commit()
 
     @staticmethod
-    def get_runtime_config(db: Session, camera_id: int) -> CameraRuntimeConfig:
-        camera = CameraService.get_camera_by_id(db, camera_id)
+    def get_runtime_config(db: Session, tenant_id: int, camera_id: int) -> CameraRuntimeConfig:
+        camera = CameraService.get_camera_by_id(db, tenant_id, camera_id)
         if camera is None:
             raise HTTPException(status_code=404, detail="Camera not found")
         zones = (
             db.query(Zone)
             .filter(
                 Zone.camera_id == camera_id,
+                Zone.tenant_id == tenant_id,
                 Zone.deleted_at.is_(None),
                 Zone.is_active.is_(True),
             )
@@ -167,9 +183,9 @@ class CameraService:
 
     @staticmethod
     def acknowledge_runtime_config(
-        db: Session, camera_id: int, ack: CameraRuntimeConfigAck
+        db: Session, tenant_id: int, camera_id: int, ack: CameraRuntimeConfigAck
     ) -> Camera:
-        camera = CameraService.get_camera_by_id(db, camera_id)
+        camera = CameraService.get_camera_by_id(db, tenant_id, camera_id)
         if camera is None:
             raise HTTPException(status_code=404, detail="Camera not found")
         if ack.revision > camera.config_revision:
@@ -192,9 +208,9 @@ class CameraService:
 
     @staticmethod
     def update_telemetry(
-        db: Session, camera_id: int, telemetry: CameraTelemetryIn
+        db: Session, tenant_id: int, camera_id: int, telemetry: CameraTelemetryIn
     ) -> CameraTelemetryOut:
-        camera = CameraService.get_camera_by_id(db, camera_id)
+        camera = CameraService.get_camera_by_id(db, tenant_id, camera_id)
         if camera is None:
             raise HTTPException(status_code=404, detail="Camera not found")
         now = datetime.now(timezone.utc)

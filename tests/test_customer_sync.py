@@ -124,7 +124,7 @@ def test_evidence_message_flips_violation_ready_with_local_urls(tmp_path, monkey
     assert violation.image_storage_key == f"local://{tmp_path}/1/image.jpg"
     assert (tmp_path / "1" / "image.jpg").read_bytes() == b"jpeg-bytes"
 
-    urls = violation_service.get_presigned_urls(db, violation.id)
+    urls = violation_service.get_presigned_urls(db, violation.tenant_id, violation.id)
     assert urls.image_url == "/api/v1/violations/1/evidence/image"
     assert urls.video_url is None
     db.close()
