@@ -132,10 +132,12 @@ jobs:
           docker run --rm \
             -e MQTT_USERNAME -e MQTT_PASSWORD \
             -v "$runtime_dir:/out" \
-            --user 0 \
+            --user "$(id -u):$(id -g)" \
             --entrypoint sh \
             eclipse-mosquitto:2 \
             -c 'mosquitto_passwd -b -c /out/mosquitto.passwd "$MQTT_USERNAME" "$MQTT_PASSWORD"' >/dev/null
+          # mosquitto_passwd runs as the runner UID so the bind-mounted file
+          # is writable for the chmod below (default container UID is root).
           chmod 600 "$runtime_dir/mosquitto.passwd" "$cert_dir/server.key"
           chmod 644 "$runtime_dir/ca.crt" "$cert_dir/ca.crt" "$cert_dir/server.crt"
 
