@@ -10,6 +10,7 @@ from sqlalchemy import text
 from backend.api.v1.api import api_router
 from backend.core.config import settings
 from backend.db.session import SessionLocal, engine
+from backend.services.customer_sync import customer_sync
 from backend.services.retention_service import retention_service
 from backend.ws import alerts_endpoint, camera_frames_endpoint
 
@@ -38,9 +39,13 @@ async def _retention_loop() -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     task = asyncio.create_task(_retention_loop())
+    # In customer-host deployments, subscribe to the cloud MQTT event topic
+    # so violations flow into the local PostgreSQL that the frontend reads.
+    customer_sync.start()
     try:
         yield
     finally:
+        customer_sync.stop()
         task.cancel()
         try:
             await task

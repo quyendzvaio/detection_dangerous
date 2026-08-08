@@ -131,13 +131,32 @@ class ViolationService:
             raise HTTPException(status_code=409, detail="Evidence is not ready")
         return PresignedUrlOut(
             violation_id=violation.id,
-            video_url=storage_service.generate_signed_download(
-                violation.video_storage_key, expires_seconds=expires_in_seconds
+            video_url=ViolationService._evidence_url(
+                db, violation, "video", expires_in_seconds
             ),
-            image_url=storage_service.generate_signed_download(
-                violation.image_storage_key, expires_seconds=expires_in_seconds
+            image_url=ViolationService._evidence_url(
+                db, violation, "image", expires_in_seconds
             ),
             expires_in_seconds=expires_in_seconds,
+        )
+
+    @staticmethod
+    def _evidence_url(
+        db: Session, violation: Violation, kind: str, expires_in_seconds: int
+    ) -> str | None:
+        storage_key = (
+            violation.video_storage_key
+            if kind == "video"
+            else violation.image_storage_key
+        )
+        if not storage_key:
+            return None
+        # Local evidence files (customer-host without Azure) are served
+        # directly by the backend; storage keys are local:// paths.
+        if storage_key.startswith("local://"):
+            return f"/api/v1/violations/{violation.id}/evidence/{kind}"
+        return storage_service.generate_signed_download(
+            storage_key, expires_seconds=expires_in_seconds
         )
 
 

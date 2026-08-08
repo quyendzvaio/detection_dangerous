@@ -52,6 +52,7 @@ class EvidenceUploader:
         upload_timeout: float = 90.0,
         retries: int = 4,
         backoff_seconds: float = 0.5,
+        on_ready: Callable[[str, str | None, str | None], None] | None = None,
     ) -> None:
         self.internal_base = backend_event_url.rsplit("/", 1)[0]
         self.service_token = service_token
@@ -62,6 +63,7 @@ class EvidenceUploader:
         self.upload_timeout = upload_timeout
         self.retries = retries
         self.backoff_seconds = backoff_seconds
+        self.on_ready = on_ready
         self.sent_count = 0
         self.failed_count = 0
         self._jobs: queue.Queue[EvidenceJob] = queue.Queue()
@@ -171,13 +173,25 @@ class EvidenceUploader:
             complete_url = (
                 f"{self.internal_base}/events/{job.event_id}/evidence/complete"
             )
-            self._request_json(
+            completed_response = self._request_json(
                 "post",
                 complete_url,
                 headers=headers,
                 json={"objects": completed},
                 retry_statuses={408, 425, 429},
             )
+            # Forward short-lived signed download URLs to the customer host
+            # (via the MQTT event bus) so local evidence can be pulled.
+            if completed_response is not None and self.on_ready is not None:
+                image_url = completed_response.get("image_download_url")
+                video_url = completed_response.get("video_download_url")
+                if image_url or video_url:
+                    try:
+                        self.on_ready(job.event_id, image_url, video_url)
+                    except Exception:
+                        log.exception(
+                            "Could not forward evidence URLs for %s", job.event_id
+                        )
             return True
         except Exception as exc:
             failed_ids = [item["evidence_id"] for item in uploads.values()]

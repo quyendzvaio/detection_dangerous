@@ -184,11 +184,30 @@ class EvidenceService:
 
     @staticmethod
     def _lifecycle_response(violation: Violation) -> EvidenceLifecycleResponse:
+        ready = violation.evidence_status == "READY"
         return EvidenceLifecycleResponse(
             event_id=violation.event_id,
             evidence_status=violation.evidence_status,
             image_storage_key=violation.image_storage_key,
             video_storage_key=violation.video_storage_key,
+            image_download_url=(
+                storage_service.generate_signed_download(
+                    violation.image_storage_key
+                )
+                if ready
+                and violation.image_storage_key
+                and storage_service.is_configured()
+                else None
+            ),
+            video_download_url=(
+                storage_service.generate_signed_download(
+                    violation.video_storage_key
+                )
+                if ready
+                and violation.video_storage_key
+                and storage_service.is_configured()
+                else None
+            ),
             objects=[
                 EvidenceObjectOut.model_validate(item)
                 for item in sorted(violation.evidence_objects, key=lambda row: row.id)

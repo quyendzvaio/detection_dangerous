@@ -1,4 +1,8 @@
+import os
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from backend.core.deps import get_current_user, get_db
@@ -10,6 +14,12 @@ from backend.models.schemas.violation import (
 from backend.services.violation_service import violation_service
 
 router = APIRouter()
+
+# Local evidence files (written by customer_sync when no Azure storage is
+# configured) are served from EVIDENCE_LOCAL_DIR/{violation_id}/.
+_LOCAL_EVIDENCE_DIR = Path(
+    os.environ.get("EVIDENCE_LOCAL_DIR", "/data/evidence")
+)
 
 
 @router.get("", response_model=list[ViolationOut])
@@ -54,3 +64,26 @@ def get_violation_presigned_url(
     return violation_service.get_presigned_urls(
         db, violation_id, expires_in_seconds=expires_in_seconds
     )
+
+
+@router.get("/{violation_id}/evidence/{kind}")
+def get_local_evidence(
+    violation_id: int,
+    kind: str,
+):
+    """Serve evidence files stored locally by customer_sync (no Azure).
+
+    Intentionally unauthenticated: the frontend renders these URLs directly
+    in <img>/<video> tags (no Authorization header possible). Files live only
+    on the customer host; the kind must be exactly 'image' or 'video' and the
+    path is confined to EVIDENCE_LOCAL_DIR/{violation_id}/ to avoid traversal.
+    """
+    if kind not in {"image", "video"}:
+        raise HTTPException(status_code=400, detail="kind must be image or video")
+    path = _LOCAL_EVIDENCE_DIR / str(violation_id) / (
+        "image.jpg" if kind == "image" else "video.mp4"
+    )
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Evidence file not found")
+    media_type = "image/jpeg" if kind == "image" else "video/mp4"
+    return FileResponse(path, media_type=media_type)

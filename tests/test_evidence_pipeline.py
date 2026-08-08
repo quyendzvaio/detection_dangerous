@@ -192,6 +192,52 @@ def test_uploader_uses_signed_put_and_removes_spool_after_complete(tmp_path):
     assert session.posts[-1][0].endswith("/complete")
 
 
+class EvidenceReadySession(FakeUploadSession):
+    """Complete response carries signed download URLs (cloud backend behavior)."""
+
+    def post(self, url, **kwargs):
+        response = super().post(url, **kwargs)
+        if url.endswith("/complete"):
+            return FakeResponse(
+                200,
+                {
+                    "evidence_status": "READY",
+                    "image_download_url": "https://saas.example/signed/image.jpg?sig=1",
+                    "video_download_url": None,
+                },
+            )
+        return response
+
+
+def test_uploader_calls_on_ready_with_download_urls(tmp_path):
+    event_id = "55555555-5555-4555-8555-555555555555"
+    image = tmp_path / "image.jpg"
+    image.write_bytes(b"jpeg-bytes")
+    session = EvidenceReadySession()
+    calls = []
+    uploader = EvidenceUploader(
+        "http://backend/api/v1/internal/events",
+        "secret",
+        tmp_path,
+        session=session,
+        retries=0,
+        on_ready=lambda event_id, image_url, video_url: calls.append(
+            (event_id, image_url, video_url)
+        ),
+    )
+    uploader.submit(
+        EvidenceJob(event_id, (EvidenceFile("IMAGE", "image/jpeg", image),))
+    )
+    uploader.close(timeout=3)
+    assert calls == [
+        (
+            event_id,
+            "https://saas.example/signed/image.jpg?sig=1",
+            None,
+        )
+    ]
+
+
 class FailingUploadSession(FakeUploadSession):
     def put(self, url, **kwargs):
         kwargs["data"].read()

@@ -9,12 +9,13 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Callable, Iterable
 
 import cv2
 
 from ai_engine.contracts.event_schema import CameraStatus, CameraStatusEvent
 from ai_engine.events import EventBus, HttpEventTransport, MqttEventTransport
+from edge_agent.messaging import MessageEnvelope
 from ai_engine.evidence import EvidenceCapture, EvidenceUploader
 from ai_engine.inference.pose_client import PoseClient
 from ai_engine.ingest.camera_stream import CameraConfig, CameraIngest
@@ -216,6 +217,34 @@ def register_runtime_cameras(
         print(f"[pipeline:{camera.camera_key}] backend camera {action}", flush=True)
 
 
+def _evidence_urls_mqtt_callback(
+    transport: MqttEventTransport, camera_key: str
+) -> Callable[[str, str | None, str | None], None]:
+    """Publish a second MQTT message with signed evidence URLs when uploads finish.
+
+    The customer host's local backend uses this to pull evidence into its own
+    storage and flip the violation to READY.
+    """
+
+    def on_ready(event_id: str, image_url: str | None, video_url: str | None) -> None:
+        payload = {
+            "event_id": event_id,
+            "evidence_status": "READY",
+            "image_storage_key": image_url,
+            "video_storage_key": video_url,
+        }
+        envelope = MessageEnvelope(
+            tenant_key=os.environ["MQTT_TENANT_KEY"],
+            device_key=os.environ["MQTT_DEVICE_KEY"],
+            camera_key=camera_key,
+            idempotency_key=f"{event_id}:evidence",
+            payload=payload,
+        )
+        transport.send(envelope)
+
+    return on_ready
+
+
 def run_camera_process(
     config: CameraConfig, options: DemoOptions, stop_event: mp.synchronize.Event
 ) -> None:
@@ -261,10 +290,20 @@ def run_camera_process(
         if options.backend_event_url is None or not options.ai_service_token:
             raise RuntimeError("Evidence upload requires backend URL and AI service token")
         camera_spool = Path(options.evidence_spool_dir)
+        mqtt_transport = (
+            event_bus.transport
+            if isinstance(event_bus.transport, MqttEventTransport)
+            else None
+        )
         evidence_uploader = EvidenceUploader(
             options.backend_event_url,
             options.ai_service_token,
             camera_spool / config.camera_key,
+            on_ready=(
+                _evidence_urls_mqtt_callback(mqtt_transport, config.camera_key)
+                if mqtt_transport is not None
+                else None
+            ),
         )
         evidence_capture = EvidenceCapture(
             config.camera_key,
