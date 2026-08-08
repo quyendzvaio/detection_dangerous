@@ -1,0 +1,23 @@
+name: "ppe_torso"
+backend: "onnxruntime"
+max_batch_size: 16
+
+input [
+    {
+        name: "images"
+        data_type: TYPE_FP32
+        dims: [3, 128, 128]
+    }
+]
+
+output [
+    {
+        name: "output0"
+        data_type: TYPE_FP32
+        dims: [2] 
+    }
+]
+
+dynamic_batching {
+    max_queue_delay_microseconds: 5000
+}

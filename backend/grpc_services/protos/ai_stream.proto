@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package ai_stream;
+
+service AIStreamService {
+  // Stream AI detection events from AI engine worker to backend
+  rpc StreamEvents (stream DetectionEvent) returns (StreamResponse);
+  
+  // Send a single violation event
+  rpc ReportViolation (DetectionEvent) returns (StreamResponse);
+}
+
+message DetectionEvent {
+  int32 camera_id = 1;
+  string violation_type = 2;     // PPE_NO_HELMET, RESTRICTED_ZONE, FALL_DETECTED
+  string severity_level = 3;     // INFO, WARNING, DANGER, CRITICAL
+  string worker_code = 4;        // Re-ID worker code
+  string video_path = 5;         // Object storage key (legacy gRPC contract)
+  string image_path = 6;         // Object storage key (legacy gRPC contract)
+  string ai_metadata_json = 7;   // Bounding box / pose keypoints JSON
+  int64 timestamp = 8;           // Unix epoch timestamp
+}
+
+message StreamResponse {
+  bool success = 1;
+  string message = 2;
+  int32 violation_id = 3;
+}

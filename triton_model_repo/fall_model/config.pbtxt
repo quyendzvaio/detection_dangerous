@@ -1,0 +1,29 @@
+name: "fall_model"
+backend: "onnxruntime"
+max_batch_size: 8
+
+# LƯU Ý: input/output name phải khớp tên thật trong model.onnx —
+# export_scripts/export_fall.py sẽ in ra tên thật sau khi convert.
+input [
+    {
+        name: "pose_sequence"
+        data_type: TYPE_FP32
+        dims: [60, 85]
+    }
+]
+
+output [
+    {
+        name: "fall_probability"
+        data_type: TYPE_FP32
+        dims: [1]
+    }
+]
+
+# Batch theo số track đang hoạt động (2 cam × vài người); model quá nhẹ nên
+# queue delay ngắn là đủ.
+dynamic_batching {
+    max_queue_delay_microseconds: 2000
+}
+
+instance_group [ { count: 1, kind: KIND_GPU } ]

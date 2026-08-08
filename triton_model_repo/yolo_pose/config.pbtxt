@@ -1,0 +1,31 @@
+name: "yolo_pose"
+backend: "onnxruntime"
+max_batch_size: 2
+
+# uint8 input (letterboxed frame, RGB, CHW) — Cast + Div(255) đã nằm trong graph
+# (export_scripts/export_pose.py). Payload gRPC nhẹ 4× so với FP32.
+input [
+    {
+        name: "images_u8"
+        data_type: TYPE_UINT8
+        dims: [3, 640, 640]
+    }
+]
+
+# [56, 8400] = [x,y,w,h,conf + 17*(x,y,visible)] × số anchor
+output [
+    {
+        name: "output0"
+        data_type: TYPE_FP32
+        dims: [56, -1]
+    }
+]
+
+# 2 camera dùng chung 1 instance — dynamic batching gộp 2 request thành batch 2.
+# queue delay 2ms là điểm khởi đầu, tune bằng perf_analyzer (0/1/2/5ms).
+dynamic_batching {
+    preferred_batch_size: [ 2 ]
+    max_queue_delay_microseconds: 2000
+}
+
+instance_group [ { count: 1, kind: KIND_GPU } ]

@@ -1,0 +1,83 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-industrial_safety_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-industrial_safety}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - industrial_safety_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-industrial_safety}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  adminer:
+    image: adminer:4
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${ADMINER_PORT:-8081}:8080"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-industrial_safety_dev}@postgres:5432/${POSTGRES_DB:-industrial_safety}
+      AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:-local-ai-service-token-change-me}
+      JWT_SECRET: ${JWT_SECRET:-local-jwt-secret-change-me}
+      AZURE_STORAGE_CONNECTION_STRING: "${AZURE_STORAGE_CONNECTION_STRING:-}"
+      AZURE_STORAGE_CONTAINER: ${AZURE_STORAGE_CONTAINER:-industrial-safety-evidence}
+      AZURE_STORAGE_PUBLIC_BLOB_ENDPOINT: "${AZURE_STORAGE_PUBLIC_BLOB_ENDPOINT:-}"
+      AZURE_STORAGE_SAS_EXPIRES_SECONDS: ${AZURE_STORAGE_SAS_EXPIRES_SECONDS:-900}
+      AZURE_STORAGE_CREATE_CONTAINER: ${AZURE_STORAGE_CREATE_CONTAINER:-true}
+      VIOLATION_RETENTION_DAYS: ${VIOLATION_RETENTION_DAYS:-3}
+      VIOLATION_MAX_COUNT: ${VIOLATION_MAX_COUNT:-1000}
+      VIOLATION_KEEP_COUNT: ${VIOLATION_KEEP_COUNT:-500}
+      VIOLATION_RETENTION_INTERVAL_SECONDS: ${VIOLATION_RETENTION_INTERVAL_SECONDS:-3600}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:80"
+
+  triton-server:
+    image: nvcr.io/nvidia/tritonserver:24.01-py3
+    ports:
+      - "8000:8000" # http
+      - "8001:8001" # grpc
+      - "8002:8002" # metrics
+    volumes:
+      - ./triton_model_repo:/models
+    command: ["tritonserver", "--model-repository=/models"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    shm_size: 2gb
+
+volumes:
+  industrial_safety_postgres_data:
