@@ -6,8 +6,6 @@
 !frontend/**
 !edge_agent/
 !edge_agent/**
-!customer_host/
-!customer_host/**
 !ai_engine/
 !ai_engine/**
 !ai_engine/__init__.py
