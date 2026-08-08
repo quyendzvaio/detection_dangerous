@@ -63,6 +63,9 @@ services:
       MQTT_PORT: ${MQTT_PORT:-8883}
       TENANT_KEY: ${TENANT_KEY:?set TENANT_KEY}
       DEVICE_KEY: ${DEVICE_KEY:?set DEVICE_KEY}
+      MQTT_USERNAME: ${MQTT_USERNAME:?set MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?set MQTT_PASSWORD}
+      MQTT_CA_FILE: ${MQTT_CA_FILE:-/run/secrets/mqtt_ca}
       LOCAL_EVENT_DB: /data/customer-events.sqlite3
     volumes:
       - customer_event_data:/data

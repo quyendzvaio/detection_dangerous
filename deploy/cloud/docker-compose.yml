@@ -7,6 +7,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-visionguard}
     volumes:
       - saas_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   control-plane:
     image: ${CONTROL_PLANE_IMAGE:-ghcr.io/ae-ai-hit16/visionguard-backend:latest}
@@ -17,9 +22,15 @@ services:
       AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:?set AI_SERVICE_TOKEN}
       DEPLOYMENT_ROLE: cloud-control-plane
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     ports:
       - "127.0.0.1:${CONTROL_PLANE_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
 
   mediamtx:
     image: bluenviron/mediamtx:1.15.0
@@ -31,6 +42,11 @@ services:
       - "${MEDIA_MTX_RTSPS_PORT:-8322}:8322"
       - "127.0.0.1:${MEDIA_MTX_API_PORT:-9997}:9997"
       - "${MEDIA_MTX_WEBRTC_PORT:-8889}:8889"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9997/v3/paths/list || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
 
   mqtt:
     image: eclipse-mosquitto:2.0
@@ -40,12 +56,25 @@ services:
       - ./secrets/certs:/mosquitto/config/certs:ro
     ports:
       - "${MQTT_PORT:-8883}:8883"
+    environment:
+      MQTT_USERNAME: ${MQTT_USERNAME:?set MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?set MQTT_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -h 127.0.0.1 -p 8883 --cafile /mosquitto/config/certs/ca.crt -u \"$${MQTT_USERNAME}\" -P \"$${MQTT_PASSWORD}\" -t health/internal -m ok -q 0"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
 
   triton:
     image: nvcr.io/nvidia/tritonserver:24.01-py3
     volumes:
       - ../triton_model_repo:/models:ro
     command: ["tritonserver", "--model-repository=/models"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8000/v2/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
     deploy:
       resources:
         reservations:
@@ -64,12 +93,26 @@ services:
       MQTT_PORT: 8883
       MQTT_TENANT_KEY: ${MQTT_TENANT_KEY:?set MQTT_TENANT_KEY}
       MQTT_DEVICE_KEY: ${MQTT_DEVICE_KEY:?set MQTT_DEVICE_KEY}
-      INFERENCE_CAMERAS: ${INFERENCE_CAMERAS:?set INFERENCE_CAMERAS}
+      MQTT_USERNAME: ${MQTT_USERNAME:?set MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?set MQTT_PASSWORD}
+      MQTT_CA_FILE: /run/secrets/mqtt_ca
+      INFERENCE_CAMERAS: ${INFERENCE_CAMERAS:-[]}
+    volumes:
+      - ./secrets/ca.crt:/run/secrets/mqtt_ca:ro
     depends_on:
-      - control-plane
-      - mediamtx
-      - mqtt
-      - triton
+      control-plane:
+        condition: service_healthy
+      mediamtx:
+        condition: service_healthy
+      mqtt:
+        condition: service_healthy
+      triton:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/visionguard-worker-ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
 
 volumes:
   saas_postgres_data:

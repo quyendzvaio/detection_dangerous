@@ -48,3 +48,89 @@ def test_mqtt_topic_rejects_unscoped_segments():
     with pytest.raises(ValueError):
         MqttTopic("events", "tenant/other", "device", "camera")
 
+
+def test_paho_transport_requires_complete_credentials(monkeypatch):
+    import sys
+    import types
+
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def username_pw_set(self, *_args):
+            raise AssertionError("partial credentials must fail before authentication")
+
+    fake_mqtt = types.SimpleNamespace(
+        CallbackAPIVersion=types.SimpleNamespace(VERSION2=2),
+        MQTTv5=5,
+        Client=FakeClient,
+    )
+    monkeypatch.setitem(sys.modules, "paho", types.ModuleType("paho"))
+    monkeypatch.setitem(sys.modules, "paho.mqtt", types.ModuleType("paho.mqtt"))
+    monkeypatch.setitem(sys.modules, "paho.mqtt.client", fake_mqtt)
+
+    from edge_agent.messaging import PahoMqttTransport
+
+    try:
+        PahoMqttTransport("mqtt", username="only-user")
+    except ValueError as exc:
+        assert "provided together" in str(exc)
+    else:
+        raise AssertionError("partial MQTT credentials were accepted")
+
+
+def test_paho_transport_uses_required_ca_verification(monkeypatch, tmp_path):
+    import ssl
+    import sys
+    import types
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def username_pw_set(self, username, password):
+            captured["credentials"] = (username, password)
+
+        def tls_set(self, **kwargs):
+            captured["tls"] = kwargs
+
+        def connect(self, host, port):
+            captured["endpoint"] = (host, port)
+
+        def loop_start(self):
+            pass
+
+        def loop_stop(self):
+            pass
+
+        def disconnect(self):
+            pass
+
+    fake_mqtt = types.SimpleNamespace(
+        CallbackAPIVersion=types.SimpleNamespace(VERSION2=2),
+        MQTTv5=5,
+        Client=FakeClient,
+    )
+    monkeypatch.setitem(sys.modules, "paho", types.ModuleType("paho"))
+    monkeypatch.setitem(sys.modules, "paho.mqtt", types.ModuleType("paho.mqtt"))
+    monkeypatch.setitem(sys.modules, "paho.mqtt.client", fake_mqtt)
+
+    ca_file = tmp_path / "ca.crt"
+    ca_file.write_text("test-ca")
+    from edge_agent.messaging import PahoMqttTransport
+
+    transport = PahoMqttTransport(
+        "mqtt",
+        username="user",
+        password="password",
+        tls_ca_file=str(ca_file),
+    )
+    transport.close()
+    assert captured["credentials"] == ("user", "password")
+    assert captured["endpoint"] == ("mqtt", 8883)
+    assert captured["tls"] == {
+        "ca_certs": str(ca_file),
+        "cert_reqs": ssl.CERT_REQUIRED,
+    }

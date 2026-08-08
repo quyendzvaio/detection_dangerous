@@ -9,6 +9,10 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: visionguard-cloud-production
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/ae-ai-hit16
@@ -67,6 +71,87 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare cloud runtime secrets and environment
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          AI_SERVICE_TOKEN: ${{ secrets.AI_SERVICE_TOKEN }}
+          CONTROL_PLANE_BOOTSTRAP_TOKEN: ${{ secrets.CONTROL_PLANE_BOOTSTRAP_TOKEN }}
+          MQTT_USERNAME: ${{ secrets.MQTT_USERNAME }}
+          MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
+          MQTT_PUBLIC_HOSTNAME: ${{ vars.MQTT_PUBLIC_HOSTNAME }}
+          MQTT_CERT_MODE: ${{ vars.MQTT_CERT_MODE || 'generated' }}
+          MQTT_CA_CERT: ${{ secrets.MQTT_CA_CERT }}
+          MQTT_SERVER_CERT: ${{ secrets.MQTT_SERVER_CERT }}
+          MQTT_SERVER_KEY: ${{ secrets.MQTT_SERVER_KEY }}
+          INFERENCE_CAMERAS: ${{ vars.INFERENCE_CAMERAS }}
+        run: |
+          set -eu
+          umask 077
+          test -n "$POSTGRES_PASSWORD"
+          test -n "$JWT_SECRET"
+          test -n "$AI_SERVICE_TOKEN"
+          test -n "$CONTROL_PLANE_BOOTSTRAP_TOKEN"
+          test -n "$MQTT_USERNAME"
+          test -n "$MQTT_PASSWORD"
+          runtime_dir="$GITHUB_WORKSPACE/deploy/cloud/secrets"
+          cert_dir="$runtime_dir/certs"
+          mkdir -p "$cert_dir"
+
+          if [ "$MQTT_CERT_MODE" = "managed" ]; then
+            test -n "$MQTT_CA_CERT"
+            test -n "$MQTT_SERVER_CERT"
+            test -n "$MQTT_SERVER_KEY"
+            printf '%s' "$MQTT_CA_CERT" > "$runtime_dir/ca.crt"
+            printf '%s' "$MQTT_CA_CERT" > "$cert_dir/ca.crt"
+            printf '%s' "$MQTT_SERVER_CERT" > "$cert_dir/server.crt"
+            printf '%s' "$MQTT_SERVER_KEY" > "$cert_dir/server.key"
+          else
+            test -n "$MQTT_PUBLIC_HOSTNAME"
+            openssl genrsa -out "$runtime_dir/ca.key" 4096 >/dev/null 2>&1
+            openssl req -x509 -new -nodes -key "$runtime_dir/ca.key" \
+              -sha256 -days 3650 \
+              -subj "/CN=VisionGuard MQTT Staging CA" \
+              -out "$runtime_dir/ca.crt" >/dev/null 2>&1
+            openssl genrsa -out "$cert_dir/server.key" 2048 >/dev/null 2>&1
+            openssl req -new -key "$cert_dir/server.key" \
+              -subj "/CN=$MQTT_PUBLIC_HOSTNAME" \
+              -out "$runtime_dir/server.csr" >/dev/null 2>&1
+            printf 'subjectAltName=DNS:mqtt,DNS:%s\nextendedKeyUsage=serverAuth\n' \
+              "$MQTT_PUBLIC_HOSTNAME" > "$runtime_dir/server.ext"
+            openssl x509 -req -in "$runtime_dir/server.csr" \
+              -CA "$runtime_dir/ca.crt" -CAkey "$runtime_dir/ca.key" \
+              -CAcreateserial -out "$cert_dir/server.crt" -days 825 -sha256 \
+              -extfile "$runtime_dir/server.ext" >/dev/null 2>&1
+            cp "$runtime_dir/ca.crt" "$cert_dir/ca.crt"
+            rm -f "$runtime_dir/ca.key" "$runtime_dir/server.csr" \
+              "$runtime_dir/server.ext" "$runtime_dir/ca.srl"
+          fi
+
+          openssl verify -CAfile "$runtime_dir/ca.crt" "$cert_dir/server.crt" >/dev/null
+          docker run --rm \
+            -e MQTT_USERNAME -e MQTT_PASSWORD \
+            -v "$runtime_dir:/out" \
+            --user 0 \
+            --entrypoint sh \
+            eclipse-mosquitto:2 \
+            -c 'mosquitto_passwd -b -c /out/mosquitto.passwd "$MQTT_USERNAME" "$MQTT_PASSWORD"' >/dev/null
+          chmod 600 "$runtime_dir/mosquitto.passwd" "$cert_dir/server.key"
+          chmod 644 "$runtime_dir/ca.crt" "$cert_dir/ca.crt" "$cert_dir/server.crt"
+
+          : > "$GITHUB_WORKSPACE/deploy/cloud/.env"
+          printf 'POSTGRES_USER=saas\n' >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
+          printf 'POSTGRES_DB=visionguard\n' >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
+          printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD" >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
+          printf 'JWT_SECRET=%s\n' "$JWT_SECRET" >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
+          printf 'AI_SERVICE_TOKEN=%s\n' "$AI_SERVICE_TOKEN" >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
+          printf 'CONTROL_PLANE_BOOTSTRAP_TOKEN=%s\n' "$CONTROL_PLANE_BOOTSTRAP_TOKEN" >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
+          printf 'MQTT_USERNAME=%s\n' "$MQTT_USERNAME" >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
+          printf 'MQTT_PASSWORD=%s\n' "$MQTT_PASSWORD" >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
+          printf 'MQTT_TENANT_KEY=cloud\nMQTT_DEVICE_KEY=inference-worker\n' >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
+          printf 'INFERENCE_CAMERAS=%s\n' "${INFERENCE_CAMERAS:-[]}" >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
+          printf 'CONTROL_PLANE_IMAGE=%s/visionguard-backend:%s\n' "$IMAGE_PREFIX" "$GITHUB_SHA" >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
+          printf 'INFERENCE_WORKER_IMAGE=%s/visionguard-inference:%s\n' "$IMAGE_PREFIX" "$GITHUB_SHA" >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
       - name: Copy cloud deployment bundle
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -79,15 +164,47 @@ jobs:
         uses: appleboy/ssh-action@v1.2.2
         env:
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          GHCR_DEPLOY_USERNAME: ${{ secrets.GHCR_DEPLOY_USERNAME }}
+          GHCR_DEPLOY_TOKEN: ${{ secrets.GHCR_DEPLOY_TOKEN }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: DEPLOY_PATH
+          envs: DEPLOY_PATH,GHCR_DEPLOY_USERNAME,GHCR_DEPLOY_TOKEN
           script: |
             set -eu
             cd "$DEPLOY_PATH/cloud"
-            docker compose pull control-plane inference-worker
+            trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+            printf '%s' "$GHCR_DEPLOY_TOKEN" | docker login ghcr.io \
+              --username "$GHCR_DEPLOY_USERNAME" --password-stdin >/dev/null
+            docker compose --env-file .env config --quiet
+            docker compose pull
             docker compose up -d --remove-orphans
-            sleep 10
-            curl --fail --silent http://127.0.0.1:${CONTROL_PLANE_PORT:-8080}/health/ready
+            deadline=$((SECONDS + 300))
+            services="postgres control-plane mediamtx mqtt triton inference-worker"
+            while [ "$SECONDS" -lt "$deadline" ]; do
+              ready=true
+              for service in $services; do
+                container_id=$(docker compose ps -q "$service")
+                if [ -z "$container_id" ]; then
+                  ready=false
+                  continue
+                fi
+                status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id")
+                if [ "$status" != "healthy" ] && [ "$status" != "running" ]; then
+                  ready=false
+                fi
+              done
+              if [ "$ready" = true ] && curl --fail --silent \
+                http://127.0.0.1:${CONTROL_PLANE_PORT:-8080}/health/ready >/dev/null; then
+                docker compose ps
+                exit 0
+              fi
+              sleep 5
+            done
+            docker compose ps
+            docker compose logs --tail 80 control-plane mqtt triton inference-worker || true
+            exit 1
+      - name: Remove runtime secrets from runner
+        if: ${{ always() }}
+        run: rm -rf deploy/cloud/secrets deploy/cloud/.env

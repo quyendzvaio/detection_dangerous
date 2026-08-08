@@ -230,6 +230,17 @@ def run_camera_process(
             max_buffer=options.event_buffer_size,
         )
     elif all(os.getenv(name) for name in ("MQTT_HOST", "MQTT_TENANT_KEY", "MQTT_DEVICE_KEY")):
+        mqtt_username = os.getenv("MQTT_USERNAME")
+        mqtt_password = os.getenv("MQTT_PASSWORD")
+        if (mqtt_username is None) != (mqtt_password is None):
+            raise RuntimeError(
+                "MQTT_USERNAME and MQTT_PASSWORD must be provided together"
+            )
+        if mqtt_username is None or mqtt_password is None:
+            raise RuntimeError(
+                "MQTT_USERNAME and MQTT_PASSWORD are required for MQTT transport"
+            )
+        mqtt_ca_file = os.getenv("MQTT_CA_FILE") or None
         event_bus = EventBus(
             MqttEventTransport(
                 host=os.environ["MQTT_HOST"],
@@ -237,6 +248,9 @@ def run_camera_process(
                 tenant_key=os.environ["MQTT_TENANT_KEY"],
                 device_key=os.environ["MQTT_DEVICE_KEY"],
                 camera_key=config.camera_key,
+                username=mqtt_username,
+                password=mqtt_password,
+                tls_ca_file=mqtt_ca_file,
             ),
             max_buffer=options.event_buffer_size,
         )

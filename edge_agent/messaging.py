@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Protocol
 
 
@@ -79,16 +81,31 @@ class FireAndForgetPublisher:
 class PahoMqttTransport:
     """Small optional adapter; paho is imported only when the edge agent runs."""
 
-    def __init__(self, host: str, port: int = 8883, username: str | None = None, password: str | None = None, tls: bool = True):
+    def __init__(
+        self,
+        host: str,
+        port: int = 8883,
+        username: str | None = None,
+        password: str | None = None,
+        tls: bool = True,
+        tls_ca_file: str | None = None,
+    ):
         try:
             import paho.mqtt.client as mqtt
         except ImportError as exc:  # pragma: no cover - exercised in edge image
             raise RuntimeError("Install paho-mqtt to run the MQTT edge transport") from exc
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5)
+        if (username is None) != (password is None):
+            raise ValueError("MQTT_USERNAME and MQTT_PASSWORD must be provided together")
         if username is not None:
             self._client.username_pw_set(username, password)
         if tls:
-            self._client.tls_set()
+            if tls_ca_file is not None and not Path(tls_ca_file).is_file():
+                raise FileNotFoundError(f"MQTT CA file does not exist: {tls_ca_file}")
+            self._client.tls_set(
+                ca_certs=tls_ca_file,
+                cert_reqs=ssl.CERT_REQUIRED,
+            )
         self._client.connect(host, port)
         self._client.loop_start()
 
@@ -100,4 +117,3 @@ class PahoMqttTransport:
     def close(self) -> None:
         self._client.loop_stop()
         self._client.disconnect()
-

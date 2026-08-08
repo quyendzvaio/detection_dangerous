@@ -121,8 +121,26 @@ class HttpEventTransport(EventTransport):
 class MqttEventTransport(EventTransport):
     """Outbound-only QoS 0 transport for server-to-customer delivery."""
 
-    def __init__(self, host: str, tenant_key: str, device_key: str, camera_key: str, port: int = 8883):
-        self._publisher = FireAndForgetPublisher(PahoMqttTransport(host, port))
+    def __init__(
+        self,
+        host: str,
+        tenant_key: str,
+        device_key: str,
+        camera_key: str,
+        port: int = 8883,
+        username: str | None = None,
+        password: str | None = None,
+        tls_ca_file: str | None = None,
+    ):
+        self._publisher = FireAndForgetPublisher(
+            PahoMqttTransport(
+                host,
+                port,
+                username=username,
+                password=password,
+                tls_ca_file=tls_ca_file,
+            )
+        )
         self._tenant_key = tenant_key
         self._device_key = device_key
         self._camera_key = camera_key

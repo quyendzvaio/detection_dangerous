@@ -15,11 +15,30 @@ def test_mqtt_event_transport_preserves_backend_payload(monkeypatch):
             return True
 
     monkeypatch.setattr("ai_engine.events.FireAndForgetPublisher", FakePublisher)
-    monkeypatch.setattr("ai_engine.events.PahoMqttTransport", lambda host, port: object())
-    transport = MqttEventTransport("mqtt", "tenant-a", "device-a", "camera-a")
+    mqtt_args = {}
+
+    def fake_transport(host, port, **kwargs):
+        mqtt_args.update(host=host, port=port, **kwargs)
+        return object()
+
+    monkeypatch.setattr("ai_engine.events.PahoMqttTransport", fake_transport)
+    transport = MqttEventTransport(
+        "mqtt",
+        "tenant-a",
+        "device-a",
+        "camera-a",
+        username="mqtt-user",
+        password="mqtt-password",
+    )
     event = CameraStatusEvent(camera_id=1, status=CameraStatus.ONLINE, observed_at=1.0)
     transport.send(event)
     assert captured["topic"] == "events/tenant-a/device-a/camera-a"
     assert captured["payload"]["event_category"] == "CAMERA_STATUS"
     assert captured["payload"]["camera_id"] == 1
-
+    assert mqtt_args == {
+        "host": "mqtt",
+        "port": 8883,
+        "username": "mqtt-user",
+        "password": "mqtt-password",
+        "tls_ca_file": None,
+    }

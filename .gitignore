@@ -26,4 +26,6 @@ docs/pipeline-architecture.html
 
 # Secrets & evidence spool
 .env
+.deploy-runtime/
+deploy/cloud/secrets/
 evidence_spool/
