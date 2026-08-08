@@ -8,7 +8,6 @@ RUN apt-get update \
 COPY edge_agent/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY edge_agent /app/edge_agent
-COPY customer_host /app/customer_host
 COPY ai_engine/__init__.py /app/ai_engine/__init__.py
 COPY ai_engine/quality_contract.py /app/ai_engine/quality_contract.py
 CMD ["python", "-m", "edge_agent.main"]
