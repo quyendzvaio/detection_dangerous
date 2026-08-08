@@ -55,23 +55,26 @@ def _register_login(client, gmail):
     return {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
-def _tenant_id(headers):
-    """Decode the JWT (signature irrelevant here) to read the tenant claim."""
-    import jwt as pyjwt
+def _tenant_id(engine, gmail):
+    """Read tenant_id from the DB for the logged-in user (no JWT lib needed)."""
+    from sqlalchemy import text
 
-    claims = pyjwt.decode(
-        headers["Authorization"].split(" ")[1],
-        options={"verify_signature": False},
-    )
-    return claims["tenant_id"]
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT tenant_id FROM users WHERE gmail = :gmail"),
+            {"gmail": gmail},
+        ).first()
+    return row[0]
 
 
 def test_signup_creates_distinct_tenants_per_user():
     client, engine, original = make_client()
     try:
-        headers_a = _register_login(client, "tenant-a@gmail.com")
-        headers_b = _register_login(client, "tenant-b@gmail.com")
-        assert _tenant_id(headers_a) != _tenant_id(headers_b)
+        _register_login(client, "tenant-a@gmail.com")
+        _register_login(client, "tenant-b@gmail.com")
+        assert _tenant_id(engine, "tenant-a@gmail.com") != _tenant_id(
+            engine, "tenant-b@gmail.com"
+        )
     finally:
         close_client(client, engine, original)
 
