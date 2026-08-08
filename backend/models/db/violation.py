@@ -19,6 +19,7 @@ class Violation(Base):
     __tablename__ = "violations"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
     event_id = Column(Uuid(as_uuid=True), nullable=False, unique=True, index=True)
     camera_id = Column(Integer, ForeignKey("cameras.id"), nullable=False, index=True)
     track_id = Column(String(150), nullable=False, index=True)

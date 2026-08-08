@@ -13,6 +13,8 @@ class Settings(BaseModel):
     AI_SERVICE_TOKEN: str = os.getenv(
         "AI_SERVICE_TOKEN", "local-ai-service-token-change-me"
     )
+    CONTROL_PLANE_BOOTSTRAP_TOKEN: str = os.getenv("CONTROL_PLANE_BOOTSTRAP_TOKEN", "")
+    DEPLOYMENT_ROLE: str = os.getenv("DEPLOYMENT_ROLE", "customer-host")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
 

@@ -33,7 +33,7 @@ class CameraConfig:
     @property
     def is_live_source(self) -> bool:
         return self.is_usb_source or str(self.source).lower().startswith(
-            ("rtsp://", "http://", "https://")
+            ("rtsp://", "rtsps://", "http://", "https://")
         )
 
 
@@ -91,11 +91,14 @@ class CameraIngest:
         config: CameraConfig,
         buffer: Optional[LatestFrameBuffer] = None,
         status_callback: Optional[StatusCallback] = None,
+        reader: object | None = None,
     ) -> None:
         self.config = config
         self.buffer = buffer or LatestFrameBuffer()
         self._status_callback = status_callback
-        self._stream = CameraStream(config)
+        # ``reader`` is the migration seam. The default remains the legacy
+        # OpenCV reader so existing demos keep working unchanged.
+        self._stream = reader or CameraStream(config)
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self.reconnect_count = 0

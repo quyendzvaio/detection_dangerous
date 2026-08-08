@@ -15,6 +15,7 @@ from ai_engine.contracts.event_schema import (
     SafetyEvent,
     Severity,
 )
+from edge_agent.messaging import FireAndForgetPublisher, MessageEnvelope, MqttTopic, PahoMqttTransport
 
 log = logging.getLogger(__name__)
 
@@ -117,6 +118,37 @@ class HttpEventTransport(EventTransport):
         ) from last_error
 
 
+class MqttEventTransport(EventTransport):
+    """Outbound-only QoS 0 transport for server-to-customer delivery."""
+
+    def __init__(self, host: str, tenant_key: str, device_key: str, camera_key: str, port: int = 8883):
+        self._publisher = FireAndForgetPublisher(PahoMqttTransport(host, port))
+        self._tenant_key = tenant_key
+        self._device_key = device_key
+        self._camera_key = camera_key
+
+    def send(self, event: DomainEvent) -> None:
+        payload = event.to_backend_payload()
+        envelope = MessageEnvelope(
+            tenant_key=self._tenant_key,
+            device_key=self._device_key,
+            camera_key=self._camera_key,
+            idempotency_key=str(payload["event_id"]),
+            payload=payload,
+        )
+        ok = self._publisher.publish(
+            MqttTopic("events", self._tenant_key, self._device_key, self._camera_key),
+            envelope,
+        )
+        if not ok:
+            raise DeliveryError(f"MQTT publish failed for event {payload['event_id']}")
+
+    def close(self) -> None:
+        transport = self._publisher.transport
+        if hasattr(transport, "close"):
+            transport.close()
+
+
 class InProcessTransport(EventTransport):
     def __init__(self, sink: Callable[[DomainEvent], None] | list[DomainEvent]) -> None:
         self.sink = sink
@@ -196,3 +228,6 @@ class EventBus:
             time.sleep(0.05)
         self._stop.set()
         self._thread.join(timeout=1.0)
+        close_transport = getattr(self.transport, "close", None)
+        if close_transport is not None:
+            close_transport()

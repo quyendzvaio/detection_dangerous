@@ -11,7 +11,7 @@ def infer_source_type(source: str) -> SourceType:
     normalized = source.strip().lower()
     if normalized.isdigit():
         return "USB"
-    if normalized.startswith("rtsp://"):
+    if normalized.startswith(("rtsp://", "rtsps://")):
         return "RTSP"
     if normalized.startswith(("http://", "https://")):
         return "HTTP"

@@ -1,0 +1,14 @@
+# Customer-site MediaMTX. Cameras/Edge Agent publish locally; the Edge Agent
+# then relays each configured path outbound to the SaaS ingress.
+logLevel: info
+rtsp: true
+rtspAddress: :8554
+api: true
+apiAddress: :9997
+webrtc: true
+webrtcAddress: :8889
+
+paths:
+  all:
+    source: publisher
+

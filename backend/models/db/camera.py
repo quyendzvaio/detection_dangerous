@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, DateTime, Float, Integer, String
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
 from backend.db.session import Base
@@ -20,6 +20,11 @@ class Camera(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    # Nullable during migration so the existing customer-host database can be
+    # upgraded before it is enrolled into a SaaS tenant.
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    edge_device_id = Column(Integer, ForeignKey("edge_devices.id"), nullable=True, index=True)
+    stream_id = Column(Integer, ForeignKey("streams.id"), nullable=True, index=True)
     camera_key = Column(String(100), nullable=False, unique=True, index=True)
     name = Column(String(100), nullable=False)
     source = Column(String(500), nullable=False)

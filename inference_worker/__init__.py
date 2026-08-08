@@ -1,0 +1,1 @@
+"""Cloud inference worker entrypoint."""

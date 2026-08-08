@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  quality-and-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements-dev.txt
+      - name: Quality artifact gate
+        run: PYTHONPATH=. python scripts/quality_gate.py
+      - name: Python tests
+        env:
+          PYTHONPATH: .
+          DATABASE_URL: sqlite://
+        run: pytest -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - working-directory: frontend
+        run: npm ci
+      - working-directory: frontend
+        run: npm run lint
+      - working-directory: frontend
+        run: npm run build
+      - name: Compose validation
+        run: docker compose config --quiet
+      - name: Production compose validation
+        env:
+          POSTGRES_PASSWORD: ci-postgres-password
+          JWT_SECRET: ci-jwt-secret
+          AI_SERVICE_TOKEN: ci-ai-token
+          CONTROL_PLANE_BOOTSTRAP_TOKEN: ci-bootstrap-token
+          CONTROL_PLANE_URL: https://ci.example.invalid
+          DEVICE_CREDENTIAL: ci-device-credential
+          MEDIA_MTX_INGRESS_URL: rtsps://ci.example.invalid:8554
+          MQTT_HOST: ci.example.invalid
+          MQTT_USERNAME: ci-user
+          MQTT_PASSWORD: ci-password
+          MQTT_TENANT_KEY: ci-tenant
+          MQTT_DEVICE_KEY: ci-worker
+          INFERENCE_CAMERAS: '[{"id":1,"key":"cam-1","stream":"rtsps://ci.example.invalid:8554/tenants/ci-tenant/cameras/cam-1/main"}]'
+          TENANT_KEY: ci-tenant
+          DEVICE_KEY: ci-device
+        run: |
+          docker compose -f deploy/cloud/docker-compose.yml config --quiet
+          docker compose -f deploy/customer/docker-compose.yml config --quiet

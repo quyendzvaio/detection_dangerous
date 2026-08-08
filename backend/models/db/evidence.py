@@ -21,6 +21,7 @@ class EvidenceObject(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
     violation_id = Column(
         Integer, ForeignKey("violations.id", ondelete="CASCADE"), nullable=False, index=True
     )

@@ -14,11 +14,12 @@ from typing import Iterable
 import cv2
 
 from ai_engine.contracts.event_schema import CameraStatus, CameraStatusEvent
-from ai_engine.events import EventBus, HttpEventTransport
+from ai_engine.events import EventBus, HttpEventTransport, MqttEventTransport
 from ai_engine.evidence import EvidenceCapture, EvidenceUploader
 from ai_engine.inference.pose_client import PoseClient
 from ai_engine.ingest.camera_stream import CameraConfig, CameraIngest
 from ai_engine.ingest.layer0_multi_runner import parse_camera_spec
+from ai_engine.ingest.stream_reader import reader_for
 from ai_engine.pipeline.layer1_processor import Layer1MetricsSnapshot, Layer1Processor
 from ai_engine.pipeline.layer2_runtime import (
     CameraLayer2Config,
@@ -48,6 +49,7 @@ class DemoOptions:
     evidence_post_seconds: float
     runtime_config_poll_seconds: float
     preview_fps: float
+    media_mtx_only: bool
 
 
 class RuntimeConfigClient:
@@ -227,6 +229,17 @@ def run_camera_process(
             ),
             max_buffer=options.event_buffer_size,
         )
+    elif all(os.getenv(name) for name in ("MQTT_HOST", "MQTT_TENANT_KEY", "MQTT_DEVICE_KEY")):
+        event_bus = EventBus(
+            MqttEventTransport(
+                host=os.environ["MQTT_HOST"],
+                port=int(os.getenv("MQTT_PORT", "8883")),
+                tenant_key=os.environ["MQTT_TENANT_KEY"],
+                device_key=os.environ["MQTT_DEVICE_KEY"],
+                camera_key=config.camera_key,
+            ),
+            max_buffer=options.event_buffer_size,
+        )
 
     evidence_uploader = None
     evidence_capture = None
@@ -276,7 +289,8 @@ def run_camera_process(
         print(f"{prefix} {status}: {message}", flush=True)
         publish_camera_status(status, message)
 
-    ingest = CameraIngest(config, status_callback=on_ingest_status)
+    reader = reader_for(config, require_mediamtx=options.media_mtx_only)
+    ingest = CameraIngest(config, reader=reader, status_callback=on_ingest_status)
     pose = PoseClient(
         url=options.triton_url,
         conf_thresh=options.confidence,
@@ -434,6 +448,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         metavar="ID:KEY:SOURCE",
     )
     parser.add_argument("--triton-url", default="localhost:8001")
+    parser.add_argument(
+        "--media-mtx-only",
+        action="store_true",
+        default=os.getenv("MEDIA_MTX_ONLY", "0").lower() in {"1", "true", "yes"},
+        help="server inference mode: accept RTSP/RTSPS MediaMTX paths only",
+    )
     parser.add_argument("--confidence", type=float, default=0.25)
     parser.add_argument("--iou", type=float, default=0.45)
     parser.add_argument("--max-frame-age-ms", type=float, default=250)
@@ -526,6 +546,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.evidence_post_seconds,
         args.runtime_config_poll_seconds,
         args.preview_fps,
+        args.media_mtx_only,
     )
     if options.backend_event_url and not args.skip_camera_registration:
         register_runtime_cameras(args.camera, options)

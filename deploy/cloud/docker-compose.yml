@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-saas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-visionguard}
+    volumes:
+      - saas_postgres_data:/var/lib/postgresql/data
+
+  control-plane:
+    image: ${CONTROL_PLANE_IMAGE:-ghcr.io/ae-ai-hit16/visionguard-backend:latest}
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-saas}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-visionguard}
+      CONTROL_PLANE_BOOTSTRAP_TOKEN: ${CONTROL_PLANE_BOOTSTRAP_TOKEN:?set CONTROL_PLANE_BOOTSTRAP_TOKEN}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:?set AI_SERVICE_TOKEN}
+      DEPLOYMENT_ROLE: cloud-control-plane
+    depends_on:
+      - postgres
+    ports:
+      - "127.0.0.1:${CONTROL_PLANE_PORT:-8080}:8080"
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.15.0
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    command: ["/mediamtx", "/mediamtx.yml"]
+    ports:
+      - "${MEDIA_MTX_RTSP_PORT:-8554}:8554"
+      - "${MEDIA_MTX_RTSPS_PORT:-8322}:8322"
+      - "127.0.0.1:${MEDIA_MTX_API_PORT:-9997}:9997"
+      - "${MEDIA_MTX_WEBRTC_PORT:-8889}:8889"
+
+  mqtt:
+    image: eclipse-mosquitto:2.0
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./secrets/mosquitto.passwd:/mosquitto/config/passwordfile:ro
+      - ./secrets/certs:/mosquitto/config/certs:ro
+    ports:
+      - "${MQTT_PORT:-8883}:8883"
+
+  triton:
+    image: nvcr.io/nvidia/tritonserver:24.01-py3
+    volumes:
+      - ../triton_model_repo:/models:ro
+    command: ["tritonserver", "--model-repository=/models"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  inference-worker:
+    image: ${INFERENCE_WORKER_IMAGE:-ghcr.io/ae-ai-hit16/visionguard-inference:latest}
+    environment:
+      CONTROL_PLANE_URL: http://control-plane:8080
+      MEDIA_MTX_RTSP_URL: rtsp://mediamtx:8554
+      TRITON_URL: triton:8001
+      MQTT_HOST: mqtt
+      MQTT_PORT: 8883
+      MQTT_TENANT_KEY: ${MQTT_TENANT_KEY:?set MQTT_TENANT_KEY}
+      MQTT_DEVICE_KEY: ${MQTT_DEVICE_KEY:?set MQTT_DEVICE_KEY}
+      INFERENCE_CAMERAS: ${INFERENCE_CAMERAS:?set INFERENCE_CAMERAS}
+    depends_on:
+      - control-plane
+      - mediamtx
+      - mqtt
+      - triton
+
+volumes:
+  saas_postgres_data:

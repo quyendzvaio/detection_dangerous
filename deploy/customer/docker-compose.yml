@@ -1,0 +1,78 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-industrial_safety}
+    volumes:
+      - customer_postgres_data:/var/lib/postgresql/data
+
+  local-backend:
+    image: ${LOCAL_BACKEND_IMAGE:-ghcr.io/ae-ai-hit16/visionguard-backend:latest}
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-industrial_safety}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:-local-only-token}
+      EVIDENCE_ENABLED: "0"
+      DEPLOYMENT_ROLE: customer-host
+    depends_on:
+      - postgres
+    ports:
+      - "127.0.0.1:${LOCAL_BACKEND_PORT:-8080}:8080"
+
+  frontend:
+    image: ${LOCAL_FRONTEND_IMAGE:-ghcr.io/ae-ai-hit16/visionguard-frontend:latest}
+    depends_on:
+      - local-backend
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+
+  mediamtx-edge:
+    image: bluenviron/mediamtx:1.15.0
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    command: ["/mediamtx", "/mediamtx.yml"]
+    ports:
+      - "127.0.0.1:${EDGE_RTSP_PORT:-8554}:8554"
+      - "127.0.0.1:${EDGE_WEBRTC_PORT:-8889}:8889"
+
+  edge-agent:
+    image: ${EDGE_AGENT_IMAGE:-ghcr.io/ae-ai-hit16/visionguard-edge-agent:latest}
+    environment:
+      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:?set CONTROL_PLANE_URL}
+      DEVICE_CREDENTIAL: ${DEVICE_CREDENTIAL:?set DEVICE_CREDENTIAL}
+      DEVICE_KEY: ${DEVICE_KEY:?set DEVICE_KEY}
+      MQTT_HOST: ${MQTT_HOST:?set MQTT_HOST}
+      MQTT_PORT: ${MQTT_PORT:-8883}
+      MEDIA_MTX_INGRESS_URL: ${MEDIA_MTX_INGRESS_URL:?set MEDIA_MTX_INGRESS_URL}
+      EDGE_CAMERA_SOURCES: ${EDGE_CAMERA_SOURCES:-{}}
+      MQTT_USERNAME: ${MQTT_USERNAME:?set MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?set MQTT_PASSWORD}
+      MQTT_CA_FILE: ${MQTT_CA_FILE:-/run/secrets/mqtt_ca}
+    devices:
+      - "${VIDEO_DEVICE:-/dev/video0}:/dev/video0"
+    depends_on:
+      - mediamtx-edge
+
+  event-consumer:
+    image: ${EDGE_AGENT_IMAGE:-ghcr.io/ae-ai-hit16/visionguard-edge-agent:latest}
+    command: ["python", "-m", "customer_host.mqtt_runner"]
+    environment:
+      MQTT_HOST: ${MQTT_HOST:?set MQTT_HOST}
+      MQTT_PORT: ${MQTT_PORT:-8883}
+      TENANT_KEY: ${TENANT_KEY:?set TENANT_KEY}
+      DEVICE_KEY: ${DEVICE_KEY:?set DEVICE_KEY}
+      LOCAL_EVENT_DB: /data/customer-events.sqlite3
+    volumes:
+      - customer_event_data:/data
+    secrets:
+      - mqtt_ca
+
+volumes:
+  customer_postgres_data:
+  customer_event_data:
+
+secrets:
+  mqtt_ca:
+    file: ./secrets/ca.crt

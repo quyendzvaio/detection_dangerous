@@ -10,6 +10,7 @@ class SystemEvent(Base):
     __tablename__ = "system_events"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
     event_id = Column(Uuid(as_uuid=True), nullable=False, unique=True, index=True)
     camera_id = Column(Integer, ForeignKey("cameras.id"), nullable=False, index=True)
     status = Column(String(20), nullable=False)

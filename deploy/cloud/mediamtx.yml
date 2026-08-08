@@ -1,0 +1,21 @@
+# Cloud MediaMTX ingress. Put TLS/authentication in front of this service in
+# production and provision one path/token per tenant/device/camera.
+logLevel: info
+rtsp: true
+rtspAddress: :8554
+rtspEncryption: optional
+rtspsAddress: :8322
+authMethod: http
+authHTTPAddress: http://control-plane:8080/api/v1/control/media-auth
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
+api: true
+apiAddress: :9997
+webrtc: true
+webrtcAddress: :8889
+
+paths:
+  all:
+    source: publisher
