@@ -1,66 +1,67 @@
-# VisionGuard AI — Industrial Safety Monitoring
+# VisionGuard AI
 
-VisionGuard AI là hệ thống giám sát an toàn từ camera/video. Hệ thống nhận frame, phát hiện và theo dõi người, phân tích PPE/ngã/vùng cấm, lưu cảnh báo vào PostgreSQL và lưu bằng chứng lên Azure Blob Storage.
+VisionGuard AI là hệ thống giám sát an toàn công nghiệp theo thời gian thực. Sản phẩm nhận video từ camera USB, file video hoặc RTSP, phát hiện người, theo dõi người và phân tích ba nhóm rủi ro:
 
-Luồng sản phẩm hiện tại:
+- PPE: thiếu mũ, kính, găng tay hoặc áo bảo hộ.
+- Fall Detection: cảnh báo nghi ngờ ngã, sau đó chuyển sang nghiêm trọng nếu người vẫn nằm.
+- Restricted Zone: phát hiện người đi vào vùng cấm.
+
+Cảnh báo được gửi về FastAPI và lưu trong PostgreSQL. Evidence được lưu trên Azure Blob Storage riêng tư và frontend xem qua SAS URL tạm thời.
+
+## Kiến trúc
 
 ```text
 Camera / Video / RTSP
         │
         ▼
-Layer 0: đọc nguồn, giữ frame mới nhất, tự reconnect
+Layer 0: đọc frame mới nhất, reconnect
         │
         ▼
 Layer 1: YOLO Pose trên Triton + BoT-SORT tracking
         │
         ▼
-Layer 2: PPE ─ Fall Detection ─ Restricted Zone
+Layer 2: PPE · Fall · Restricted Zone
         │
         ▼
-EventBus HTTP + evidence uploader
+EventBus HTTP + Evidence Uploader
         │
         ▼
-FastAPI ─ PostgreSQL local ─ Azure Blob Storage
+FastAPI · PostgreSQL · Azure Blob Storage
         │
         ▼
 React UI + WebSocket live view/alerts
 ```
 
-Mỗi camera chạy trong một process Python độc lập. Các process dùng chung Triton Inference Server trên GPU nhưng có queue, tracker và trạng thái phân tích riêng.
+Mỗi camera chạy trong một process AI riêng. Triton dùng chung các model ONNX; trạng thái tracker và các nhánh phân tích được tách theo camera.
 
-## 1. Chức năng đang có
+## Tính năng hiện có
 
-- Đăng ký/đăng nhập cơ bản bằng Gmail và mật khẩu; một loại tài khoản.
-- Camera/video CRUD, xem một camera, grid nhiều camera và phóng to.
+- Quản lý camera/video và xem nhiều camera.
 - Live frame qua WebSocket, có REST snapshot fallback.
-- Hiển thị bbox, local track ID, FPS, pose/tracker latency và end-to-end latency.
-- Bật/tắt toàn bộ overlay trên giao diện.
-- Bật/tắt PPE, Fall và Zone độc lập theo từng camera, áp dụng nóng khoảng 1 giây.
-- Vẽ/sửa/bật/tắt/xóa polygon vùng cấm trên hình camera trực tiếp.
-- Phát hiện vi phạm PPE: mũ, kính, găng tay và áo bảo hộ.
-- Phát hiện ngã theo chuỗi keypoint thời gian.
-- Phát hiện người đi vào vùng cấm.
-- Danh sách cảnh báo, lọc và xem chi tiết evidence.
-- PPE/Zone lưu ảnh; Fall lưu ảnh và video H.264 tương thích trình duyệt.
-- PostgreSQL lưu camera, zone, cảnh báo, trạng thái và metadata evidence.
-- Azure Blob Storage lưu file evidence bằng container private và SAS URL ngắn hạn.
+- Hiển thị bbox, track ID, FPS và latency.
+- Bật/tắt PPE, Fall và Zone độc lập theo từng camera, áp dụng nóng.
+- Vẽ, sửa, bật/tắt và xóa polygon vùng cấm.
+- Danh sách cảnh báo, lọc và xem evidence.
+- PostgreSQL lưu camera, zone, violation và metadata evidence.
+- PPE/Zone tạo ảnh evidence; Fall tạo ảnh và video H.264.
+- Retention tự động: xóa violation quá 3 ngày; khi đạt 1.000 violation thì giữ lại 500 bản ghi mới nhất.
 
-Chưa thuộc MVP: Re-ID giữa nhiều camera, phân quyền nhiều role, báo cáo nâng cao, email/SMS, workflow xác nhận cảnh báo và retention policy.
+Re-ID mạnh giữa nhiều camera và phân quyền nhiều role chưa thuộc luồng MVP hiện tại.
 
-## 2. Yêu cầu môi trường
+## Yêu cầu
 
-Khuyến nghị Ubuntu/Linux vì camera USB dùng V4L2.
+Khuyến nghị Ubuntu/Linux vì camera USB sử dụng V4L2.
 
-Cần cài:
+Cần có:
 
 - Git.
-- Python 3.12 và module `venv`.
+- Python 3.12 và `venv`.
 - Docker Engine và Docker Compose plugin.
-- NVIDIA GPU, NVIDIA driver và NVIDIA Container Toolkit.
-- Node.js 22 chỉ cần khi phát triển/test frontend ngoài Docker.
-- `v4l-utils` được khuyến nghị để tìm camera USB.
+- NVIDIA driver, NVIDIA Container Toolkit và GPU tương thích Triton.
+- Node.js 22 chỉ cần khi phát triển frontend ngoài Docker.
+- `v4l-utils` để kiểm tra camera USB.
 
-Kiểm tra nhanh:
+Kiểm tra:
 
 ```bash
 python3 --version
@@ -69,9 +70,9 @@ docker compose version
 nvidia-smi
 ```
 
-Triton trong `docker-compose.yml` yêu cầu GPU. Nếu `nvidia-smi` hoặc Docker GPU chưa hoạt động, Triton sẽ không khởi động được.
+Nếu chỉ chạy backend/frontend và không chạy Triton GPU, vẫn có thể khởi động Docker nhưng pipeline AI sẽ không sẵn sàng.
 
-## 3. Chuẩn bị source code
+## Cài đặt
 
 ```bash
 git clone https://github.com/AE-AI-HIT16/Real-Time-Industrial-Safety-AI-Analytics.git
@@ -86,7 +87,7 @@ cp .env.example .env
 chmod +x run_pipeline_demo.sh
 ```
 
-Các model runtime phải tồn tại tại:
+Các model runtime phải có trong repository:
 
 ```text
 triton_model_repo/yolo_pose/1/model.onnx
@@ -97,79 +98,78 @@ triton_model_repo/ppe_hand/1/model.onnx
 triton_model_repo/ppe_torso/1/model.onnx
 ```
 
-Nếu repository sau này dùng Git LFS cho model, chạy `git lfs pull` sau khi clone.
+Không commit `.env`, connection string Azure hoặc mật khẩu thật.
 
-## 4. Cấu hình `.env`
+## Cấu hình `.env`
 
-Không commit file `.env`. Các giá trị tối thiểu cho local development đã có trong `.env.example`.
-
-### Test nhanh không dùng Azure
-
-Mở `.env` và đặt:
+`.env.example` đã có cấu hình local mặc định. Các giá trị quan trọng:
 
 ```dotenv
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=industrial_safety_dev
+POSTGRES_DB=industrial_safety
+BACKEND_PORT=8080
+FRONTEND_PORT=3000
+ADMINER_PORT=8081
+
+AI_SERVICE_TOKEN=local-ai-service-token-change-me
+JWT_SECRET=local-jwt-secret-change-me
+BACKEND_EVENT_URL=http://localhost:8080/api/v1/internal/events
+
+# Không dùng Azure khi test nhanh
 EVIDENCE_ENABLED=0
-LAYER2_MODELS=zone,fall,ppe
+LAYER2_MODELS=zone,fall
+
+# Retention mặc định
+VIOLATION_RETENTION_DAYS=3
+VIOLATION_MAX_COUNT=1000
+VIOLATION_KEEP_COUNT=500
+VIOLATION_RETENTION_INTERVAL_SECONDS=3600
 ```
 
-Detection, live view và lưu cảnh báo PostgreSQL vẫn chạy. Evidence sẽ không được upload và cảnh báo có thể giữ trạng thái `PROCESSING`.
+### Chạy không dùng Azure
 
-### Test đầy đủ với Azure evidence
+Đặt `EVIDENCE_ENABLED=0`. Detection, live view và PostgreSQL vẫn hoạt động nhưng evidence sẽ không upload lên Azure.
 
-Tạo Azure Storage Account và lấy connection string tại:
+### Chạy đầy đủ evidence Azure
 
-```text
-Azure Portal
-→ Storage accounts
-→ chọn storage account
-→ Security + networking
-→ Access keys
-→ Connection string
-```
-
-Điền vào `.env`:
+Tạo Azure Storage Account, lấy connection string tại `Access keys`, rồi điền:
 
 ```dotenv
 AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net"
 AZURE_STORAGE_CONTAINER=industrial-safety-evidence
 AZURE_STORAGE_CREATE_CONTAINER=true
 EVIDENCE_ENABLED=1
-LAYER2_MODELS=zone,fall,ppe
 ```
 
-Container Azure được để private. Frontend không nhận connection string; backend chỉ sinh SAS URL tạm thời khi người dùng mở evidence.
+Container nên để private. Backend giữ connection string và chỉ cấp SAS URL ngắn hạn cho frontend.
 
-## 5. Chọn nguồn camera/video
+## Chạy sản phẩm
 
-Cú pháp mỗi nguồn:
+Cú pháp camera:
 
 ```text
 --camera CAMERA_ID:CAMERA_KEY:SOURCE
 ```
 
-- `CAMERA_ID`: số nguyên duy nhất, đồng thời là ID trong PostgreSQL.
-- `CAMERA_KEY`: tên kỹ thuật duy nhất, không chứa dấu `:`.
-- `SOURCE`: index USB, đường dẫn thiết bị, file video tuyệt đối hoặc URL RTSP/HTTP.
+`CAMERA_ID` phải duy nhất; `CAMERA_KEY` không chứa dấu `:`; `SOURCE` là camera index, thiết bị V4L2, file video hoặc URL RTSP.
 
 ### Camera USB
 
-Liệt kê thiết bị:
-
 ```bash
 v4l2-ctl --list-devices
-ls -l /dev/video*
-ls -l /dev/v4l/by-id/ /dev/v4l/by-path/
+ls -l /dev/video* /dev/v4l/by-id/ 2>/dev/null
 ```
 
-Ưu tiên `/dev/v4l/by-id/...-video-index0` thay vì số `0`, `2`, `4` vì Linux có thể đổi index sau khi rút/cắm camera.
-
-Ví dụ một camera USB:
+Có thể chạy bằng index:
 
 ```bash
-./run_pipeline_demo.sh --camera 1:gate:0 --show
+./run_pipeline_demo.sh --camera 1:usb-c920:0 --show
 ```
 
-Ví dụ camera laptop và camera USB chạy đồng thời:
+Nếu index camera thay đổi khi rút/cắm, dùng đường dẫn ổn định dưới `/dev/v4l/by-id/`.
+
+### Hai camera
 
 ```bash
 ./run_pipeline_demo.sh \
@@ -178,7 +178,13 @@ Ví dụ camera laptop và camera USB chạy đồng thời:
   --show
 ```
 
-### Video file
+Bỏ `--show` nếu chỉ xem live view trên web:
+
+```bash
+./run_pipeline_demo.sh --camera 1:usb-c920:0
+```
+
+### File video
 
 Dùng đường dẫn tuyệt đối:
 
@@ -188,9 +194,7 @@ Dùng đường dẫn tuyệt đối:
   --show
 ```
 
-Video file chạy theo FPS gốc và kết thúc ở EOF.
-
-### RTSP/HTTP
+### RTSP
 
 ```bash
 ./run_pipeline_demo.sh \
@@ -198,116 +202,67 @@ Video file chạy theo FPS gốc và kết thúc ở EOF.
   --show
 ```
 
-Không đưa URL chứa tài khoản/mật khẩu thật vào Git hoặc tài liệu chia sẻ.
+Script sẽ build/start PostgreSQL, Adminer, backend, frontend và Triton; chờ backend/database/model sẵn sàng rồi mới khởi động process camera.
 
-## 6. Chạy toàn bộ sản phẩm
-
-Lệnh sau sẽ:
-
-1. Đọc `.env`.
-2. Build/start PostgreSQL, Adminer, backend, frontend và Triton.
-3. Chờ backend/database và model Triton sẵn sàng.
-4. Tạo một process AI riêng cho mỗi `--camera`.
-
-```bash
-./run_pipeline_demo.sh --camera 1:cam1:0 --show
-```
-
-Bỏ `--show` nếu chỉ muốn xem camera trên web:
-
-```bash
-./run_pipeline_demo.sh --camera 1:cam1:0
-```
-
-Các địa chỉ sau sẽ khả dụng:
+## Truy cập giao diện
 
 | Thành phần | Địa chỉ |
 |---|---|
-| Product UI | <http://localhost:3000> |
-| Swagger API | <http://localhost:8080/docs> |
-| Backend readiness | <http://localhost:8080/health/ready> |
-| Adminer | <http://localhost:8081> |
-| Triton HTTP | <http://localhost:8000> |
-| Triton metrics | <http://localhost:8002/metrics> |
+| Product UI | http://localhost:3000 |
+| Swagger API | http://localhost:8080/docs |
+| Backend readiness | http://localhost:8080/health/ready |
+| Adminer | http://localhost:8081 |
+| Triton HTTP | http://localhost:8000 |
+| Triton metrics | http://localhost:8002/metrics |
 
-Lần đầu truy cập UI:
+Lần đầu sử dụng:
 
 1. Mở `http://localhost:3000/register`.
-2. Đăng ký Gmail hợp lệ và mật khẩu tối thiểu 6 ký tự.
-3. Đăng nhập.
-4. Mở Cameras để xem live view và trạng thái runtime.
+2. Tạo tài khoản và đăng nhập.
+3. Vào Cameras để xem live view.
+4. Bật/tắt PPE, Fall hoặc Zone trên đúng camera.
+5. Vào Violations để xem cảnh báo và evidence.
 
-## 7. Checklist test sản phẩm
+## Luồng cảnh báo Fall
 
-### Camera và overlay
+- Model fall xác nhận bước đầu bằng debounce 2/3 lần dự đoán → tạo `FALL_SUSPECTED` với mức `WARNING`.
+- Nếu cùng track có tư thế nằm hợp lệ liên tục 5 giây → tạo thêm `FALL_DETECTED` với mức `CRITICAL`.
+- Người đứng lại ổn định 2 giây → incident trở về bình thường.
+- Warning và critical là hai event/evidence riêng; critical không sửa đè record warning.
+- Nếu tracker mất ID hoặc keypoint bị che khuất quá nhiều, việc chuyển critical có thể bị trì hoãn.
 
-- Camera chuyển sang `ONLINE` và có hình trực tiếp.
-- Dashboard/Cameras hiển thị FPS và latency.
-- Nút bật/tắt overlay chỉ ẩn/hiện phần vẽ, không dừng model.
-- Khi chạy nhiều camera, mỗi camera có card/process riêng.
+## Kiểm tra model theo camera
 
-### Bật/tắt model theo camera
+Trên giao diện, trạng thái toggle sẽ chuyển `PENDING` rồi `APPLIED` sau khi process camera nhận cấu hình. Tắt model chỉ tắt nhánh phân tích tương ứng; pose/tracking Layer 1 vẫn có thể còn bbox và track ID.
 
-- Bấm PPE/FALL/ZONE trên đúng card camera.
-- `Config` chuyển `PENDING`, sau đó thành `APPLIED` trong khoảng 1 giây.
-- Tắt Fall/PPE phải xóa cảnh báo tương ứng khỏi overlay.
-- Tắt Zone phải ẩn polygon và ngừng cảnh báo zone nhưng không xóa polygon khỏi database.
-- Bật lại model không yêu cầu restart pipeline.
+## Kiểm tra database và evidence
 
-Lưu ý: bbox và ID vẫn còn khi tắt cả ba model vì pose/tracking thuộc Layer 1 luôn chạy.
-
-### Zone
-
-1. Mở `Vẽ và quản lý zone`.
-2. Kiểm tra raw live frame xuất hiện làm nền.
-3. Nhấp ít nhất ba điểm và lưu.
-4. Bật Zone và đi vào polygon để tạo cảnh báo.
-
-### Alert, database và evidence
-
-- Mở Violations để xem cảnh báo mới.
-- PPE/Zone có ảnh evidence.
-- Fall có ảnh và video H.264.
-- Evidence mới tạo phải có trạng thái `READY` trước khi xem.
-- `image_storage_key`/`video_storage_key` bằng `None` trong log event ban đầu là bình thường; key được backend cập nhật sau upload.
-
-Xem PostgreSQL bằng Adminer:
+Trong Adminer dùng:
 
 ```text
 System: PostgreSQL
 Server: postgres
-Username: giá trị POSTGRES_USER
-Password: giá trị POSTGRES_PASSWORD
-Database: giá trị POSTGRES_DB
+Username: POSTGRES_USER
+Password: POSTGRES_PASSWORD
+Database: POSTGRES_DB
 ```
 
-Các bảng thường kiểm tra: `cameras`, `zones`, `violations`, `evidence_objects`, `system_events`, `users`.
+Các bảng chính:
 
-## 8. Chạy từng phần
+- `cameras`
+- `zones`
+- `violations`
+- `evidence_objects`
+- `system_events`
+- `users`
 
-Chỉ khởi động web/database/Triton, chưa chạy camera process:
+PPE/Zone thường có ảnh; Fall warning có ảnh, Fall critical có ảnh và video. Evidence cần có trạng thái `READY` mới xem được.
 
-```bash
-docker compose up -d --build
-docker compose ps
-```
-
-Các demo tầng thấp:
-
-```bash
-./run_layer0_demo.sh --source 0 --show
-./run_layer0_multi.sh --camera 1:cam1:0 --camera 2:cam2:2 --show
-./run_layer1_demo.sh --camera 1:cam1:0 --camera 2:cam2:2 --show
-```
-
-Các script tầng thấp dùng cho debug, không thay thế `run_pipeline_demo.sh` khi test sản phẩm end-to-end.
-
-## 9. Kiểm thử code
-
-Python:
+## Kiểm thử code
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m pytest -q
+PYTHONPATH=. .venv/bin/pytest -q
+docker compose config --quiet
 ```
 
 Frontend:
@@ -320,37 +275,34 @@ npm run build
 cd ..
 ```
 
-Docker Compose:
+## Dừng và reset
 
-```bash
-docker compose config --quiet
-```
-
-Trạng thái test gần nhất được ghi trong [docs/CURRENT_PROGRESS.md](docs/CURRENT_PROGRESS.md).
-
-## 10. Dừng hệ thống
-
-- Nhấn `q` trong cửa sổ OpenCV hoặc `Ctrl+C` tại terminal để dừng AI camera processes.
-- Các container Docker vẫn tiếp tục chạy sau khi AI process dừng.
-- Dừng container nhưng giữ dữ liệu PostgreSQL:
+Dừng process camera bằng `Ctrl+C` hoặc phím `q` trong cửa sổ OpenCV. Dừng container nhưng giữ database:
 
 ```bash
 docker compose down
 ```
 
-Không dùng `docker compose down -v` nếu muốn giữ database; tùy chọn `-v` sẽ xóa volume PostgreSQL.
+Không dùng `docker compose down -v` nếu muốn giữ PostgreSQL; tùy chọn `-v` xóa volume database.
 
-## 11. Lỗi thường gặp
-
-### `Cannot open camera source` hoặc `No such device`
+Nếu chỉ muốn chạy các container đã build sẵn khi Docker Hub đang lỗi:
 
 ```bash
-v4l2-ctl --list-devices
-ls -l /dev/video*
-fuser /dev/video0
+docker compose up -d --no-build postgres adminer backend frontend triton-server
 ```
 
-Rút/cắm lại camera, đóng OBS/Chrome/Cheese đang giữ thiết bị và ưu tiên đường dẫn `/dev/v4l/by-id/`.
+## Lỗi thường gặp
+
+### Docker không tải được base image
+
+Lỗi `lookup auth.docker.io ... i/o timeout` là lỗi DNS/mạng của Docker, không phải lỗi camera. Kiểm tra mạng Docker, thử lại hoặc dùng `--no-build` nếu image đã có local.
+
+### Backend không ready
+
+```bash
+docker compose logs --tail=200 backend postgres
+curl http://localhost:8080/health/ready
+```
 
 ### Triton không ready
 
@@ -360,38 +312,30 @@ nvidia-smi
 curl http://localhost:8000/v2/health/ready
 ```
 
-Kiểm tra NVIDIA Container Toolkit và file model trong `triton_model_repo/`.
+Kiểm tra NVIDIA Container Toolkit và model trong `triton_model_repo/`.
 
-### Backend không ready
-
-```bash
-docker compose logs --tail=200 backend postgres
-curl http://localhost:8080/health/ready
-```
-
-### Không thấy code frontend mới
+### Không mở được camera
 
 ```bash
-docker compose up -d --build frontend
+v4l2-ctl --list-devices
+fuser /dev/video0
 ```
 
-Sau đó hard-refresh trình duyệt bằng `Ctrl+Shift+R`.
+Đóng ứng dụng đang giữ camera như OBS/Chrome/Cheese và thử đường dẫn `/dev/v4l/by-id/`.
 
-### Evidence không upload hoặc không phát
+### Evidence không upload
+
+Kiểm tra connection string Azure, `EVIDENCE_ENABLED`, log backend và bảng `evidence_objects`:
 
 ```bash
 docker compose logs --tail=200 backend
 ```
 
-Kiểm tra Azure connection string, bảng `evidence_objects`, `evidence_status` và file còn lại trong `evidence_spool/`. Chỉ video Fall tạo sau bản H.264 mới chắc chắn phát được trên trình duyệt; clip `mp4v` cũ cần chuyển mã.
-
-## 12. Tài liệu dành cho đội nhóm
+## Tài liệu liên quan
 
 - [Tiến độ hiện tại](docs/CURRENT_PROGRESS.md)
 - [Pipeline và event contract](docs/PRODUCT_PIPELINE.md)
 - [Backend product contract](docs/BACKEND_PRODUCT_CONTRACT.md)
 - [Phân rã chức năng AI](docs/AI_PRODUCT_FEATURE_DECOMPOSITION.md)
 - [Onboarding Layer 5–6](docs/TEAM_ONBOARDING_LAYER5_6.md)
-- [API specification MVP](specs/001-industrial-safety-api/spec.md)
-
-Khi thay đổi contract, cần cập nhật đồng thời schema, producer, consumer, migration, test và tài liệu liên quan trong cùng pull request.
+- [API specification](specs/001-industrial-safety-api/spec.md)
