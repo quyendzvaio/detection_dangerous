@@ -75,8 +75,8 @@ Nếu chỉ chạy backend/frontend và không chạy Triton GPU, vẫn có th�
 ## Cài đặt
 
 ```bash
-git clone https://github.com/AE-AI-HIT16/Real-Time-Industrial-Safety-AI-Analytics.git
-cd Real-Time-Industrial-Safety-AI-Analytics
+git clone https://github.com/quyendzvaio/detection_dangerous.git
+cd detection_dangerous
 
 python3 -m venv .venv
 source .venv/bin/activate

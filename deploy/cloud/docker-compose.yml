@@ -14,7 +14,7 @@ services:
       retries: 20
 
   control-plane:
-    image: ${CONTROL_PLANE_IMAGE:-ghcr.io/ae-ai-hit16/visionguard-backend:latest}
+    image: ${CONTROL_PLANE_IMAGE:-ghcr.io/quyendzvaio/visionguard-backend:latest}
     environment:
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-saas}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-visionguard}
       CONTROL_PLANE_BOOTSTRAP_TOKEN: ${CONTROL_PLANE_BOOTSTRAP_TOKEN:?set CONTROL_PLANE_BOOTSTRAP_TOKEN}
@@ -84,7 +84,7 @@ services:
               capabilities: [gpu]
 
   inference-worker:
-    image: ${INFERENCE_WORKER_IMAGE:-ghcr.io/ae-ai-hit16/visionguard-inference:latest}
+    image: ${INFERENCE_WORKER_IMAGE:-ghcr.io/quyendzvaio/visionguard-inference:latest}
     environment:
       CONTROL_PLANE_URL: http://control-plane:8080
       MEDIA_MTX_RTSP_URL: rtsp://mediamtx:8554

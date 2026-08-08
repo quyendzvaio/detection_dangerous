@@ -15,7 +15,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/ae-ai-hit16
+  IMAGE_PREFIX: ghcr.io/quyendzvaio
 
 jobs:
   publish:
