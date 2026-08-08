@@ -154,6 +154,10 @@ jobs:
           printf 'INFERENCE_CAMERAS=%s\n' "${INFERENCE_CAMERAS:-[]}" >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
           printf 'CONTROL_PLANE_IMAGE=%s/visionguard-backend:%s\n' "$IMAGE_PREFIX" "$GITHUB_SHA" >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
           printf 'INFERENCE_WORKER_IMAGE=%s/visionguard-inference:%s\n' "$IMAGE_PREFIX" "$GITHUB_SHA" >> "$GITHUB_WORKSPACE/deploy/cloud/.env"
+          # scp-action runs in its own container (different UID), so relax
+          # permissions set by umask 077 before bundling.
+          chmod 644 "$GITHUB_WORKSPACE/deploy/cloud/.env"
+          chmod 755 "$runtime_dir"
       - name: Copy cloud deployment bundle
         uses: appleboy/scp-action@v0.1.7
         with:
