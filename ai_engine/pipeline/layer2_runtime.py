@@ -368,6 +368,15 @@ class Layer2Runtime:
                         zone_id=int(zone["id"]),
                     )
                 )
+            # Events are emitted only once per intrusion, but the overlay needs
+            # a fresh state for every observed track so it can return to NORMAL
+            # as soon as the foot point leaves all confirmed zones.
+            self._update(
+                "zone",
+                task.track_id,
+                task.captured_at,
+                zones=checker.active_zone_ids(task.track_id),
+            )
             self._processed["zone"] += 1
 
     def _run_fall(self) -> None:

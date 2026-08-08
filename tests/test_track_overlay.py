@@ -74,6 +74,17 @@ def test_zone_event_uses_zone_id():
     assert store.snapshot()["cam1-7"].zones == ("42",)
 
 
+def test_zone_overlay_returns_to_normal_after_exit_update():
+    store = OverlayStateStore()
+    store.apply_update(update("zone", zones=(42,)))
+    assert store.snapshot()["cam1-7"].severity == "DANGER"
+
+    store.apply_update(update("zone", captured_at=2.0, zones=()))
+    state = store.snapshot()["cam1-7"]
+    assert state.zones == ()
+    assert state.severity == "NORMAL"
+
+
 def test_disabling_each_branch_clears_only_its_overlay_state():
     store = OverlayStateStore()
     store.apply_event(fall_event())
