@@ -167,15 +167,6 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           source: "deploy/cloud"
           target: ${{ vars.DEPLOY_PATH }}
-      - name: Copy triton model repo
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          port: ${{ secrets.DEPLOY_SSH_PORT }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: "triton_model_repo"
-          target: ${{ vars.DEPLOY_PATH }}/deploy
       - name: Restart cloud stack and verify health
         uses: appleboy/ssh-action@v1.2.2
         env:
@@ -190,6 +181,17 @@ jobs:
           envs: DEPLOY_PATH,GHCR_DEPLOY_USERNAME,GHCR_DEPLOY_TOKEN
           script: |
             set -eu
+            # triton_model_repo travels via git: runner->VPS scp is ~100KB/s,
+            # VPS->github CDN is ~30MB/s. Fetch it here instead of scp.
+            if [ ! -d "$DEPLOY_PATH/deploy/triton_model_repo" ]; then
+              mkdir -p "$DEPLOY_PATH/deploy"
+              git clone --depth 1 --branch main \
+                "https://github.com/$GITHUB_REPOSITORY.git" \
+                "$DEPLOY_PATH/deploy/visionguard-src"
+              mv "$DEPLOY_PATH/deploy/visionguard-src/triton_model_repo" \
+                 "$DEPLOY_PATH/deploy/triton_model_repo"
+              rm -rf "$DEPLOY_PATH/deploy/visionguard-src"
+            fi
             mkdir -p "$DEPLOY_PATH/deploy/cloud"
             cd "$DEPLOY_PATH/deploy/cloud"
             chmod 600 .env
