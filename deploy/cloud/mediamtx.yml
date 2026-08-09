@@ -3,7 +3,7 @@
 logLevel: info
 rtsp: true
 rtspAddress: :8554
-rtspEncryption: no
+rtspEncryption: "no"
 rtspsAddress: :8322
 authMethod: http
 authHTTPAddress: http://control-plane:8080/api/v1/control/media-auth

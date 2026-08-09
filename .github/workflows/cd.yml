@@ -193,6 +193,9 @@ jobs:
             mkdir -p "$DEPLOY_PATH/deploy/cloud"
             cd "$DEPLOY_PATH/deploy/cloud"
             chmod 600 .env
+            # mqtt container runs as uid 1883 (mosquitto); ro mounts block the
+            # entrypoint's chown, so make the secrets readable by that user.
+            chown -R 1883:1883 secrets/certs secrets/mosquitto.passwd
             trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
             test -n "$GHCR_DEPLOY_USERNAME"
             test -n "$GHCR_DEPLOY_TOKEN"
