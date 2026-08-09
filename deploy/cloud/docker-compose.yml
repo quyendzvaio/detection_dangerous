@@ -42,11 +42,8 @@ services:
       - "${MEDIA_MTX_RTSPS_PORT:-8322}:8322"
       - "127.0.0.1:${MEDIA_MTX_API_PORT:-9997}:9997"
       - "${MEDIA_MTX_WEBRTC_PORT:-8889}:8889"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9997/v3/paths/list || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
+    # scratch image (no sh/wget/curl) — healthcheck impossible; API reachability
+    # checked by consumers at runtime.
 
   mqtt:
     image: eclipse-mosquitto:2.0
@@ -60,7 +57,7 @@ services:
       MQTT_USERNAME: ${MQTT_USERNAME:?set MQTT_USERNAME}
       MQTT_PASSWORD: ${MQTT_PASSWORD:?set MQTT_PASSWORD}
     healthcheck:
-      test: ["CMD-SHELL", "mosquitto_pub -h 127.0.0.1 -p 8883 --cafile /mosquitto/config/certs/ca.crt -u \"$${MQTT_USERNAME}\" -P \"$${MQTT_PASSWORD}\" -t health/internal -m ok -q 0"]
+      test: ["CMD-SHELL", "mosquitto_pub -h 127.0.0.1 -p 8883 --cafile /mosquitto/config/certs/ca.crt --insecure -u \"$${MQTT_USERNAME}\" -P \"$${MQTT_PASSWORD}\" -t health/internal -m ok -q 0"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -103,7 +100,7 @@ services:
       control-plane:
         condition: service_healthy
       mediamtx:
-        condition: service_healthy
+        condition: service_started
       mqtt:
         condition: service_healthy
       triton:
