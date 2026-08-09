@@ -36,7 +36,7 @@ services:
     image: bluenviron/mediamtx:1.15.0
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
-    command: ["/mediamtx", "/mediamtx.yml"]
+    command: ["/mediamtx.yml"]
     ports:
       - "${MEDIA_MTX_RTSP_PORT:-8554}:8554"
       - "${MEDIA_MTX_RTSPS_PORT:-8322}:8322"
