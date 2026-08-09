@@ -192,6 +192,7 @@ jobs:
             set -eu
             mkdir -p "$DEPLOY_PATH/deploy/cloud"
             cd "$DEPLOY_PATH/deploy/cloud"
+            chmod 600 .env
             trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
             test -n "$GHCR_DEPLOY_USERNAME"
             test -n "$GHCR_DEPLOY_TOKEN"
